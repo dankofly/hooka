@@ -312,8 +312,13 @@ const App: React.FC = () => {
 
             <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-800 hidden md:block"></div>
 
-            <button onClick={toggleTheme} className="p-2 md:p-2.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-all">
-              {isDark ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2" fill="none" stroke="currentColor" strokeWidth="2"/></svg> : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
+            <button
+              onClick={toggleTheme}
+              aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
+              className="p-2 md:p-2.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-all"
+            >
+              {isDark ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2" fill="none" stroke="currentColor" strokeWidth="2"/></svg> : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
             </button>
             {user ? (
               <div className="flex items-center gap-3 md:gap-5 pl-3 md:pl-6 border-l border-zinc-200 dark:border-zinc-800 animate-in fade-in slide-in-from-right-4">
@@ -445,7 +450,7 @@ const App: React.FC = () => {
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-10">
               {concepts.map((c, i) => (
-                <div key={i} className={`animate-in fade-in slide-in-from-bottom-10 duration-1000 fill-mode-both`} style={{ animationDelay: `${i * 150}ms` }}>
+                <div key={`concept-${i}-${c.hook.substring(0, 20).replace(/\s/g, '-')}`} className={`animate-in fade-in slide-in-from-bottom-10 duration-1000 fill-mode-both`} style={{ animationDelay: `${i * 150}ms` }}>
                   <ConceptCard concept={c} index={i} t={t} />
                 </div>
               ))}
@@ -471,9 +476,13 @@ const App: React.FC = () => {
         <div className="flex gap-8 md:gap-12">
           <button onClick={() => setIsImpressumOpen(true)} className="text-[9px] md:text-[10px] font-black text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-[0.2em] antialiased">{t.nav.impressum}</button>
           <button onClick={() => setIsPrivacyOpen(true)} className="text-[9px] md:text-[10px] font-black text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-[0.2em] antialiased">{t.nav.privacy}</button>
-          {/* Secret Admin Button */}
-          <button onClick={() => setIsAdminOpen(true)} className="text-zinc-300 dark:text-zinc-800 hover:text-purple-500 transition-colors">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          {/* Admin Button */}
+          <button
+            onClick={() => setIsAdminOpen(true)}
+            aria-label="Admin panel"
+            className="text-zinc-300 dark:text-zinc-800 hover:text-purple-500 transition-colors"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           </button>
         </div>
       </footer>

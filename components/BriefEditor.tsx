@@ -1,7 +1,7 @@
 
 import React, { useState } from 'react';
 import { MarketingBrief, Language, NeuroScores, TranslationObject } from '../types.ts';
-import { researchBrand, ensureApiKey } from '../services/gemini.ts';
+import { researchBrand } from '../services/gemini.ts';
 import { analytics } from '../services/analytics.ts';
 
 interface BriefEditorProps {
@@ -41,7 +41,6 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
     
     setIsScouting(true);
     try {
-      await ensureApiKey();
       const result = await researchBrand(targetUrl, brief.language);
       onAutoFill(result);
       setUrl('');

@@ -1,18 +1,16 @@
 
 import { ViralConcept, MarketingBrief, Language } from '../types.ts';
 
-export const ensureApiKey = async () => {
-  return;
-};
+// Constants for timeout configuration
+const API_TIMEOUT_MS = 30000; // 30 seconds
 
 /**
  * Ruft die Netlify Serverless Function auf.
- * Jetzt mit Client-Side Timeout, um Endlos-Ladezustände zu verhindern.
+ * Mit Client-Side Timeout, um Endlos-Ladezustände zu verhindern.
  */
-const callApi = async (action: string, payload: any) => {
-  // 30s Timeout Limit für das Frontend (Netlify Functions haben oft 10s oder 26s Limit)
+const callApi = async (action: string, payload: Record<string, unknown> = {}) => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
   try {
     const response = await fetch('/.netlify/functions/api', {

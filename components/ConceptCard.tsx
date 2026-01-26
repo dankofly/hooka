@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { ViralConcept, TranslationObject } from '../types.ts';
 
 interface ConceptCardProps {
@@ -7,14 +7,35 @@ interface ConceptCardProps {
   t: TranslationObject;
 }
 
-export const ConceptCard: React.FC<ConceptCardProps> = ({ concept, index, t }) => {
+// Memoized component to prevent unnecessary re-renders
+export const ConceptCard: React.FC<ConceptCardProps> = memo(({ concept, index, t }) => {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const text = `HOOK: ${concept.hook}\n\nSTRATEGIE: ${concept.strategy}\n\nSCRIPT:\n${concept.script}`;
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+
+    try {
+      // Modern clipboard API with fallback
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback for older browsers or insecure contexts
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   };
 
   const ScoreBar = ({ label, value }: { label: string, value: number }) => (
@@ -43,13 +64,15 @@ export const ConceptCard: React.FC<ConceptCardProps> = ({ concept, index, t }) =
             {concept.strategy}
           </span>
         </div>
-        <button 
+        <button
           onClick={handleCopy}
+          aria-label={copied ? "Copied!" : "Copy to clipboard"}
+          title={copied ? "Copied!" : "Copy to clipboard"}
           className={`p-2.5 md:p-3 rounded-lg transition-all haptic-btn border ${
             copied ? 'bg-purple-600 border-purple-600 text-white' : 'bg-zinc-800 dark:bg-zinc-900 border-zinc-700 dark:border-zinc-800 text-zinc-400 hover:text-white shadow-sm hover:border-zinc-600'
           }`}
         >
-          {copied ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M20 6 9 17 4 12"/></svg> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>}
+          {copied ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true"><path d="M20 6 9 17 4 12"/></svg> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>}
         </button>
       </div>
       
@@ -78,4 +101,7 @@ export const ConceptCard: React.FC<ConceptCardProps> = ({ concept, index, t }) =
       </div>
     </div>
   );
-};
+});
+
+// Display name for React DevTools
+ConceptCard.displayName = 'ConceptCard';
