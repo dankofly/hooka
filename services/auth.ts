@@ -32,19 +32,15 @@ declare global {
   }
 }
 
-export type AuthProvider = 'google';
-
 // Helper to generate stable ID from Netlify Identity user
-const generateStableId = (netlifyUserId: string, provider: string): string => {
-  return `${provider}-${netlifyUserId.substring(0, 12)}`;
+const generateStableId = (netlifyUserId: string): string => {
+  return `user-${netlifyUserId.substring(0, 12)}`;
 };
 
 // Convert Netlify Identity user to app UserProfile
 const mapNetlifyUserToProfile = (netlifyUser: NetlifyUser): UserProfile => {
-  const provider = netlifyUser.app_metadata?.provider || 'google';
-
   return {
-    id: generateStableId(netlifyUser.id, provider),
+    id: generateStableId(netlifyUser.id),
     name: netlifyUser.user_metadata?.full_name || netlifyUser.email.split('@')[0],
     brand: '',
     email: netlifyUser.email,
@@ -73,9 +69,9 @@ export const authService = {
     return mapNetlifyUserToProfile(netlifyUser);
   },
 
-  // Sign in with social provider (opens Netlify Identity modal)
-  async signInWithSocial(provider: AuthProvider): Promise<UserProfile> {
-    analytics.track('sso_start', { provider });
+  // Open login modal (Netlify Identity widget handles email/password)
+  async openLogin(): Promise<UserProfile> {
+    analytics.track('login_start', {});
 
     return new Promise((resolve, reject) => {
       if (typeof window === 'undefined' || !window.netlifyIdentity) {
@@ -83,19 +79,16 @@ export const authService = {
         return;
       }
 
-      // Listen for login success
       const onLogin = (user: NetlifyUser | undefined) => {
         if (user) {
           const profile = mapNetlifyUserToProfile(user);
 
-          analytics.track('sso_success', {
-            provider,
+          analytics.track('login_success', {
             userId: profile.id,
             name: profile.name,
             email: profile.email
           });
 
-          // Clean up listeners
           window.netlifyIdentity.off('login', onLogin);
           window.netlifyIdentity.off('close', onClose);
 
@@ -103,7 +96,6 @@ export const authService = {
         }
       };
 
-      // Listen for close without login
       const onClose = () => {
         const user = window.netlifyIdentity.currentUser();
         if (!user) {
@@ -116,7 +108,7 @@ export const authService = {
       window.netlifyIdentity.on('login', onLogin);
       window.netlifyIdentity.on('close', onClose);
 
-      // Open the Identity widget
+      // Open the Identity widget for login/signup
       window.netlifyIdentity.open('login');
     });
   },
@@ -148,7 +140,6 @@ export const authService = {
     window.netlifyIdentity.on('login', handleLogin);
     window.netlifyIdentity.on('logout', handleLogout);
 
-    // Return unsubscribe function
     return () => {
       window.netlifyIdentity.off('login', handleLogin);
       window.netlifyIdentity.off('logout', handleLogout);
