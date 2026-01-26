@@ -367,16 +367,86 @@ export const handler = async (event: any) => {
          if (!ADMIN_PASS || payload.password !== ADMIN_PASS) {
            return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
          }
-         if (!sql) { result = { userCount: 0, historyCount: 0, apiCalls: 0, tokenCount: 0 }; break; }
+         if (!sql) {
+           result = {
+             userCount: 0,
+             generationCount: 0,
+             hookCount: 0,
+             tokenCount: 0,
+             premiumUsers: 0,
+             parameterStats: {}
+           };
+           break;
+         }
          try {
-           const [u, h, a, t] = await Promise.all([
-             sql`SELECT COUNT(*) FROM hypeakz_users`, 
-             sql`SELECT COUNT(*) FROM hypeakz_history`, 
-             sql`SELECT COUNT(*) FROM hypeakz_analytics`,
-             sql`SELECT SUM((metadata->>'tokens')::int) as total FROM hypeakz_analytics WHERE event_name = 'ai_cost'`
+           const [users, generations, tokens, quotas, paramStats] = await Promise.all([
+             // Total users
+             sql`SELECT COUNT(*) FROM hypeakz_users`,
+             // Total generations (from analytics)
+             sql`SELECT COUNT(*) FROM hypeakz_analytics WHERE event_name = 'generation'`,
+             // Total tokens
+             sql`SELECT SUM((metadata->>'tokens')::int) as total FROM hypeakz_analytics WHERE event_name IN ('ai_cost', 'generation')`,
+             // Quota stats (total used generations + premium users)
+             sql`SELECT
+               SUM(used_generations) as total_used,
+               COUNT(*) FILTER (WHERE is_premium = TRUE) as premium_count
+             FROM hypeakz_quotas`,
+             // Parameter usage stats
+             sql`SELECT
+               COUNT(*) FILTER (WHERE metadata->>'language' = 'DE') as lang_de,
+               COUNT(*) FILTER (WHERE metadata->>'language' = 'EN') as lang_en,
+               COUNT(*) FILTER (WHERE metadata->>'contentContext' IS NOT NULL) as content_context,
+               COUNT(*) FILTER (WHERE metadata->>'limbicType' IS NOT NULL) as limbic_type,
+               COUNT(*) FILTER (WHERE metadata->>'patternType' IS NOT NULL) as pattern_type,
+               COUNT(*) FILTER (WHERE metadata->>'repSystem' IS NOT NULL) as rep_system,
+               COUNT(*) FILTER (WHERE metadata->>'motivation' IS NOT NULL) as motivation,
+               COUNT(*) FILTER (WHERE metadata->>'decisionStyle' IS NOT NULL) as decision_style,
+               COUNT(*) FILTER (WHERE metadata->>'presupposition' IS NOT NULL) as presupposition,
+               COUNT(*) FILTER (WHERE metadata->>'chunking' IS NOT NULL) as chunking,
+               COUNT(*) FILTER (WHERE (metadata->>'triggerWordsUsed')::boolean = true) as trigger_words,
+               COUNT(*) FILTER (WHERE (metadata->>'focusKeyword')::boolean = true) as focus_keyword
+             FROM hypeakz_analytics WHERE event_name = 'generation'`
            ]);
-           result = { userCount: parseInt(u[0].count), historyCount: parseInt(h[0].count) * 4, apiCalls: parseInt(a[0].count), tokenCount: t[0].total ? parseInt(t[0].total) : 0 };
-         } catch (e) { result = { userCount: 0, historyCount: 0, apiCalls: 0, tokenCount: 0 }; }
+
+           // Calculate generation count from quota table (more accurate) or analytics
+           const quotaGenerations = quotas[0]?.total_used ? parseInt(quotas[0].total_used) : 0;
+           const analyticsGenerations = parseInt(generations[0].count);
+           const generationCount = Math.max(quotaGenerations, analyticsGenerations);
+
+           result = {
+             userCount: parseInt(users[0].count),
+             generationCount: generationCount,
+             hookCount: generationCount * 4, // 4 hooks per generation
+             tokenCount: tokens[0].total ? parseInt(tokens[0].total) : 0,
+             premiumUsers: quotas[0]?.premium_count ? parseInt(quotas[0].premium_count) : 0,
+             parameterStats: {
+               language: {
+                 DE: parseInt(paramStats[0]?.lang_de || 0),
+                 EN: parseInt(paramStats[0]?.lang_en || 0)
+               },
+               contentContext: parseInt(paramStats[0]?.content_context || 0),
+               limbicType: parseInt(paramStats[0]?.limbic_type || 0),
+               patternType: parseInt(paramStats[0]?.pattern_type || 0),
+               repSystem: parseInt(paramStats[0]?.rep_system || 0),
+               motivation: parseInt(paramStats[0]?.motivation || 0),
+               decisionStyle: parseInt(paramStats[0]?.decision_style || 0),
+               presupposition: parseInt(paramStats[0]?.presupposition || 0),
+               chunking: parseInt(paramStats[0]?.chunking || 0),
+               triggerWords: parseInt(paramStats[0]?.trigger_words || 0),
+               focusKeyword: parseInt(paramStats[0]?.focus_keyword || 0)
+             }
+           };
+         } catch (e) {
+           console.error("Admin stats error:", e);
+           result = {
+             userCount: 0,
+             generationCount: 0,
+             hookCount: 0,
+             tokenCount: 0,
+             premiumUsers: 0,
+             parameterStats: {}
+           };
+         }
          break;
       }
       case 'get-admin-prompt': {
@@ -574,10 +644,32 @@ export const handler = async (event: any) => {
           },
         });
 
-        if (sql && response.usageMetadata) {
-          const totalTokens = response.usageMetadata.totalTokenCount || 0;
-          const logId = Date.now().toString() + Math.random().toString(36).substring(7);
-          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${logId}, 'ai_cost', ${Date.now()}, ${{ tokens: totalTokens, model: 'gemini-3-flash' }})`.catch(console.error);
+        if (sql) {
+          const totalTokens = response.usageMetadata?.totalTokenCount || 0;
+          const timestamp = Date.now();
+
+          // Log AI cost
+          const costLogId = timestamp.toString() + Math.random().toString(36).substring(7);
+          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${costLogId}, 'ai_cost', ${timestamp}, ${{ tokens: totalTokens, model: 'gemini-3-flash' }})`.catch(console.error);
+
+          // Log generation with all parameters for stats
+          const genLogId = timestamp.toString() + Math.random().toString(36).substring(2, 9);
+          const generationMeta = {
+            language: brief.language || 'DE',
+            contentContext: brief.contentContext || null,
+            limbicType: brief.limbicType || null,
+            focusKeyword: brief.focusKeyword ? true : false, // Just track if used, not the value
+            patternType: brief.patternType || null,
+            repSystem: brief.repSystem || null,
+            motivation: brief.motivation || null,
+            decisionStyle: brief.decisionStyle || null,
+            presupposition: brief.presupposition || null,
+            chunking: brief.chunking || null,
+            triggerWordsUsed: brief.triggerWords && brief.triggerWords.length > 0,
+            targetScores: scores,
+            tokens: totalTokens
+          };
+          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${genLogId}, 'generation', ${timestamp}, ${generationMeta})`.catch(console.error);
         }
 
         try { result = JSON.parse(response.text || "[]"); } catch(e) { result = []; }

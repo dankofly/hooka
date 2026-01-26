@@ -9,18 +9,41 @@ interface AdminModalProps {
   t: TranslationObject;
 }
 
+interface ParameterStats {
+  language?: { DE: number; EN: number };
+  contentContext?: number;
+  limbicType?: number;
+  patternType?: number;
+  repSystem?: number;
+  motivation?: number;
+  decisionStyle?: number;
+  presupposition?: number;
+  chunking?: number;
+  triggerWords?: number;
+  focusKeyword?: number;
+}
+
 interface AdminStats {
   userCount: number;
-  historyCount: number;
-  apiCalls: number;
-  tokenCount?: number;
+  generationCount: number;
+  hookCount: number;
+  tokenCount: number;
+  premiumUsers: number;
+  parameterStats: ParameterStats;
 }
 
 export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) => {
   const [password, setPassword] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [prompt, setPrompt] = useState('');
-  const [stats, setStats] = useState<AdminStats>({ userCount: 0, historyCount: 0, apiCalls: 0, tokenCount: 0 });
+  const [stats, setStats] = useState<AdminStats>({
+    userCount: 0,
+    generationCount: 0,
+    hookCount: 0,
+    tokenCount: 0,
+    premiumUsers: 0,
+    parameterStats: {}
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState('');
 
@@ -59,7 +82,14 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
     try {
       const [p, s] = await Promise.all([
         getAdminPrompt().catch(() => ""),
-        getAdminStats(password).catch(() => ({ userCount: 0, historyCount: 0, apiCalls: 0, tokenCount: 0 }))
+        getAdminStats(password).catch(() => ({
+          userCount: 0,
+          generationCount: 0,
+          hookCount: 0,
+          tokenCount: 0,
+          premiumUsers: 0,
+          parameterStats: {}
+        }))
       ]);
       setPrompt(p);
       setStats(s);
@@ -151,36 +181,77 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
             <div className="space-y-6 lg:col-span-1 overflow-y-auto pr-2 custom-scrollbar">
               <div className="bg-green-900/5 border border-green-500/20 p-6 relative">
                 <h3 className="text-xs font-bold text-green-700 tracking-widest mb-4 border-b border-green-900/50 pb-2">{t.admin.metrics}</h3>
-                <div className="space-y-6">
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">{t.admin.users}</div>
+                      <div className="text-3xl font-black text-green-400">{stats.userCount}</div>
+                    </div>
+                    <div>
+                      <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">Premium</div>
+                      <div className="text-3xl font-black text-yellow-400">{stats.premiumUsers}</div>
+                    </div>
+                  </div>
                   <div>
-                    <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">{t.admin.users}</div>
-                    <div className="text-4xl font-black text-green-400">{stats.userCount}</div>
+                    <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">Generierungen</div>
+                    <div className="text-4xl font-black text-green-400">{stats.generationCount}</div>
                   </div>
                   <div>
                     <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">{t.admin.hooks}</div>
-                    <div className="text-4xl font-black text-green-400">{stats.historyCount}</div>
+                    <div className="text-4xl font-black text-green-400">{stats.hookCount}</div>
                   </div>
                   <div>
                     <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">{t.admin.tokens}</div>
-                    <div className="text-4xl font-black text-green-400">
+                    <div className="text-3xl font-black text-green-400">
                       {stats.tokenCount ? (stats.tokenCount / 1000).toFixed(1) + 'k' : '0'}
                       <span className="text-xs font-normal text-green-800 ml-2">tks</span>
                     </div>
                   </div>
-                  <div>
-                    <div className="text-green-800 text-[10px] uppercase tracking-wider mb-1">{t.admin.throughput}</div>
-                    <div className="text-4xl font-black text-green-400">{stats.apiCalls} <span className="text-xs font-normal text-green-800">reqs</span></div>
-                  </div>
                 </div>
               </div>
 
-              <div className="bg-green-900/5 border border-green-500/20 p-6 relative h-48 flex flex-col">
-                 <h3 className="text-xs font-bold text-green-700 tracking-widest mb-4 border-b border-green-900/50 pb-2">{t.admin.neuralAct}</h3>
-                 <div className="flex-grow flex items-end justify-between gap-1">
-                    {[40, 70, 45, 90, 60, 80, 50, 70, 95, 60].map((h, i) => (
-                      <div key={i} style={{ height: `${h}%` }} className="w-full bg-green-500/20 hover:bg-green-500 transition-colors duration-300"></div>
-                    ))}
-                 </div>
+              {/* Parameter Usage Stats */}
+              <div className="bg-green-900/5 border border-green-500/20 p-6 relative">
+                <h3 className="text-xs font-bold text-green-700 tracking-widest mb-4 border-b border-green-900/50 pb-2">PARAMETER USAGE</h3>
+                <div className="space-y-3 text-xs">
+                  {/* Language Split */}
+                  <div className="flex justify-between items-center">
+                    <span className="text-green-600">Sprache</span>
+                    <span className="text-green-400 font-mono">
+                      DE: {stats.parameterStats?.language?.DE || 0} | EN: {stats.parameterStats?.language?.EN || 0}
+                    </span>
+                  </div>
+                  {/* NLP Parameters */}
+                  {[
+                    { key: 'limbicType', label: 'Limbic Type' },
+                    { key: 'patternType', label: 'Pattern Type' },
+                    { key: 'contentContext', label: 'Content Context' },
+                    { key: 'repSystem', label: 'VAK System' },
+                    { key: 'motivation', label: 'Motivation' },
+                    { key: 'decisionStyle', label: 'Decision Style' },
+                    { key: 'presupposition', label: 'Presupposition' },
+                    { key: 'chunking', label: 'Chunking' },
+                    { key: 'triggerWords', label: 'Trigger Words' },
+                    { key: 'focusKeyword', label: 'Focus Keyword' },
+                  ].map(({ key, label }) => {
+                    const value = stats.parameterStats?.[key as keyof ParameterStats] as number || 0;
+                    const percentage = stats.generationCount > 0 ? Math.round((value / stats.generationCount) * 100) : 0;
+                    return (
+                      <div key={key} className="space-y-1">
+                        <div className="flex justify-between">
+                          <span className="text-green-600">{label}</span>
+                          <span className="text-green-400 font-mono">{value} ({percentage}%)</span>
+                        </div>
+                        <div className="h-1 bg-green-900/50 rounded">
+                          <div
+                            className="h-full bg-green-500 rounded transition-all"
+                            style={{ width: `${percentage}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
