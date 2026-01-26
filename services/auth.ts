@@ -2,84 +2,156 @@
 import { UserProfile } from '../types.ts';
 import { analytics } from './analytics.ts';
 
-export type AuthProvider = 'google' | 'apple' | 'meta';
+// Type for Netlify Identity User
+interface NetlifyUser {
+  id: string;
+  email: string;
+  user_metadata: {
+    full_name?: string;
+    avatar_url?: string;
+  };
+  app_metadata: {
+    provider?: string;
+    providers?: string[];
+  };
+  created_at: string;
+}
 
-// Helper to generate a stable ID from a string (email)
-const generateStableId = (str: string): string => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0; // Convert to 32bit integer
+// Declare global netlifyIdentity (loaded via CDN)
+declare global {
+  interface Window {
+    netlifyIdentity: {
+      init: (options?: { container?: string; locale?: string }) => void;
+      open: (tab?: 'login' | 'signup') => void;
+      close: () => void;
+      logout: () => Promise<void>;
+      currentUser: () => NetlifyUser | null;
+      on: (event: string, callback: (user?: NetlifyUser) => void) => void;
+      off: (event: string, callback?: Function) => void;
+    };
   }
-  return Math.abs(hash).toString(16);
+}
+
+export type AuthProvider = 'google';
+
+// Helper to generate stable ID from Netlify Identity user
+const generateStableId = (netlifyUserId: string, provider: string): string => {
+  return `${provider}-${netlifyUserId.substring(0, 12)}`;
 };
 
-/**
- * Der authService simuliert nun einen realistischen OAuth-Flow.
- * Anstatt nur zu warten, wird ein Prozess-Lifecycle durchlaufen,
- * der Metadaten von den jeweiligen Providern "abruft".
- */
+// Convert Netlify Identity user to app UserProfile
+const mapNetlifyUserToProfile = (netlifyUser: NetlifyUser): UserProfile => {
+  const provider = netlifyUser.app_metadata?.provider || 'google';
+
+  return {
+    id: generateStableId(netlifyUser.id, provider),
+    name: netlifyUser.user_metadata?.full_name || netlifyUser.email.split('@')[0],
+    brand: '',
+    email: netlifyUser.email,
+    phone: '',
+    createdAt: new Date(netlifyUser.created_at).getTime()
+  };
+};
+
 export const authService = {
+  // Initialize Netlify Identity widget
+  init(): void {
+    if (typeof window !== 'undefined' && window.netlifyIdentity) {
+      window.netlifyIdentity.init();
+    }
+  },
+
+  // Get current authenticated user
+  getCurrentUser(): UserProfile | null {
+    if (typeof window === 'undefined' || !window.netlifyIdentity) {
+      return null;
+    }
+
+    const netlifyUser = window.netlifyIdentity.currentUser();
+    if (!netlifyUser) return null;
+
+    return mapNetlifyUserToProfile(netlifyUser);
+  },
+
+  // Sign in with social provider (opens Netlify Identity modal)
   async signInWithSocial(provider: AuthProvider): Promise<UserProfile> {
     analytics.track('sso_start', { provider });
-    
-    // Wir simulieren das Öffnen eines Popups und den Austausch von Tokens
+
     return new Promise((resolve, reject) => {
-      // Zeit für den "Handshake"
-      const authDuration = provider === 'google' ? 2000 : 1500;
-      
-      setTimeout(() => {
-        // Mock-Daten der Provider inklusive Email und Telefon
-        const providerData: Record<AuthProvider, { name: string; brand: string; email: string; phone: string }> = {
-          google: { 
-            name: 'Daniel Kofler', 
-            brand: 'HYPEAKZ.IO Agency',
-            email: 'mail@danielkofler.com',
-            phone: '+43 676 7293888'
-          },
-          apple: { 
-            name: 'Jordan Sterling', 
-            brand: 'Sterling Creative',
-            email: 'j.sterling@icloud.com',
-            phone: '+1 555 0123 456'
-          },
-          meta: { 
-            name: 'Casey Vance', 
-            brand: 'Social Growth Labs',
-            email: 'casey@meta-partners.com',
-            phone: '+1 415 999 8888'
-          }
-        };
+      if (typeof window === 'undefined' || !window.netlifyIdentity) {
+        reject(new Error('Netlify Identity not available'));
+        return;
+      }
 
-        const data = providerData[provider];
-        
-        if (!data) {
-          reject(new Error("Provider authentication failed"));
-          return;
+      // Listen for login success
+      const onLogin = (user: NetlifyUser | undefined) => {
+        if (user) {
+          const profile = mapNetlifyUserToProfile(user);
+
+          analytics.track('sso_success', {
+            provider,
+            userId: profile.id,
+            name: profile.name,
+            email: profile.email
+          });
+
+          // Clean up listeners
+          window.netlifyIdentity.off('login', onLogin);
+          window.netlifyIdentity.off('close', onClose);
+
+          resolve(profile);
         }
+      };
 
-        // Generate stable ID based on email to track unique users correctly across sessions
-        const stableId = `${provider}-${generateStableId(data.email)}`;
+      // Listen for close without login
+      const onClose = () => {
+        const user = window.netlifyIdentity.currentUser();
+        if (!user) {
+          window.netlifyIdentity.off('login', onLogin);
+          window.netlifyIdentity.off('close', onClose);
+          reject(new Error('Authentication cancelled'));
+        }
+      };
 
-        const user: UserProfile = {
-          id: stableId,
-          name: data.name,
-          brand: data.brand,
-          email: data.email,
-          phone: data.phone,
-          createdAt: Date.now()
-        };
+      window.netlifyIdentity.on('login', onLogin);
+      window.netlifyIdentity.on('close', onClose);
 
-        analytics.track('sso_success', { 
-          provider, 
-          userId: user.id, 
-          name: user.name, 
-          email: user.email 
-        });
-        
-        resolve(user);
-      }, authDuration);
+      // Open the Identity widget
+      window.netlifyIdentity.open('login');
     });
+  },
+
+  // Sign out
+  logout(): void {
+    if (typeof window !== 'undefined' && window.netlifyIdentity) {
+      window.netlifyIdentity.logout();
+      analytics.track('logout', {});
+    }
+  },
+
+  // Subscribe to auth state changes
+  onAuthStateChange(callback: (user: UserProfile | null) => void): () => void {
+    if (typeof window === 'undefined' || !window.netlifyIdentity) {
+      return () => {};
+    }
+
+    const handleLogin = (netlifyUser: NetlifyUser | undefined) => {
+      if (netlifyUser) {
+        callback(mapNetlifyUserToProfile(netlifyUser));
+      }
+    };
+
+    const handleLogout = () => {
+      callback(null);
+    };
+
+    window.netlifyIdentity.on('login', handleLogin);
+    window.netlifyIdentity.on('logout', handleLogout);
+
+    // Return unsubscribe function
+    return () => {
+      window.netlifyIdentity.off('login', handleLogin);
+      window.netlifyIdentity.off('logout', handleLogout);
+    };
   }
 };

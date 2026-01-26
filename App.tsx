@@ -95,29 +95,71 @@ const App: React.FC = () => {
     } else {
       document.documentElement.classList.remove('dark');
     }
-    
+
     const savedLang = localStorage.getItem(STORAGE_KEY_APP_LANG);
     if (savedLang === 'DE' || savedLang === 'EN') {
       setAppLanguage(savedLang as Language);
     }
-    
-    // Initial Load: User
-    try {
-      const savedUser = localStorage.getItem(STORAGE_KEY_USER);
-      if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        setUser(parsed);
-        // Background sync check
-        db.getUser(parsed.id).then(cloudUser => {
-          if (cloudUser) {
-            setUser(cloudUser);
-            localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(cloudUser));
-          }
-        }).catch(err => console.debug("Offline or Sync Failed:", err));
+
+    // Initialize Netlify Identity
+    authService.init();
+
+    // Check for existing Netlify Identity session
+    const existingIdentityUser = authService.getCurrentUser();
+    if (existingIdentityUser) {
+      // Try to get enriched profile from DB
+      db.getUser(existingIdentityUser.id).then(dbUser => {
+        if (dbUser) {
+          setUser(dbUser);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(dbUser));
+        } else {
+          setUser(existingIdentityUser);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(existingIdentityUser));
+        }
+      }).catch(err => {
+        // Fallback to Identity user if DB fails
+        setUser(existingIdentityUser);
+        console.debug("DB sync failed, using Identity user:", err);
+      });
+    } else {
+      // Fallback to localStorage for backward compatibility
+      try {
+        const savedUser = localStorage.getItem(STORAGE_KEY_USER);
+        if (savedUser) {
+          const parsed = JSON.parse(savedUser);
+          setUser(parsed);
+          db.getUser(parsed.id).then(cloudUser => {
+            if (cloudUser) {
+              setUser(cloudUser);
+              localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(cloudUser));
+            }
+          }).catch(err => console.debug("Offline or Sync Failed:", err));
+        }
+      } catch (e) {
+        console.warn("Could not load local user data", e);
       }
-    } catch (e) {
-      console.warn("Could not load local user data", e);
     }
+
+    // Subscribe to auth state changes
+    const unsubscribe = authService.onAuthStateChange((profile) => {
+      if (profile) {
+        db.getUser(profile.id).then(dbUser => {
+          const mergedUser = dbUser || profile;
+          setUser(mergedUser);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(mergedUser));
+          if (!dbUser) {
+            setIsProfileModalOpen(true);
+            db.saveUser(profile).catch(err => console.warn("DB save failed", err));
+          }
+        }).catch(() => {
+          setUser(profile);
+          localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(profile));
+        });
+      } else {
+        setUser(null);
+        localStorage.removeItem(STORAGE_KEY_USER);
+      }
+    });
 
     // Initial Load: Data
     db.init().then(async () => {
@@ -125,6 +167,8 @@ const App: React.FC = () => {
       if (h) setHistory(h);
       if (p) setProfiles(p);
     });
+
+    return () => unsubscribe();
   }, []);
 
   const handleAppLanguageChange = (lang: Language) => {
@@ -140,25 +184,37 @@ const App: React.FC = () => {
     setIsAuthenticating(provider);
     try {
       const newUser = await authService.signInWithSocial(provider);
-      
-      // OPTIMISTIC UI UPDATE: Log in immediately, don't wait for DB
-      setUser(newUser);
+
+      // Check if user already exists in DB
+      const existingDbUser = await db.getUser(newUser.id).catch(() => null);
+      const finalUser = existingDbUser ? { ...existingDbUser, ...newUser } : newUser;
+
+      // OPTIMISTIC UI UPDATE: Log in immediately
+      setUser(finalUser);
       try {
-        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(newUser));
+        localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(finalUser));
       } catch (e) {
         console.warn("Local storage blocked");
       }
 
       setIsLoginModalOpen(false);
-      setIsProfileModalOpen(true);
-      analytics.track('login_success', { provider, name: newUser.name });
+
+      // Only show profile modal for new users (need to fill brand/phone)
+      if (!existingDbUser || !existingDbUser.brand) {
+        setIsProfileModalOpen(true);
+      }
+
+      analytics.track('login_success', { provider, name: finalUser.name });
 
       // Sync DB in background
-      db.saveUser(newUser).catch(err => console.warn("Background DB sync failed", err));
+      db.saveUser(finalUser).catch(err => console.warn("Background DB sync failed", err));
 
-    } catch (err) {
-      console.error("Login failed", err);
-      setError(t.errors.authFailed);
+    } catch (err: any) {
+      // Don't show error if user just closed the modal
+      if (err.message !== 'Authentication cancelled') {
+        console.error("Login failed", err);
+        setError(t.errors.authFailed);
+      }
     } finally {
       setIsAuthenticating(null);
     }
@@ -179,6 +235,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
+    authService.logout();
     setUser(null);
     localStorage.removeItem(STORAGE_KEY_USER);
   };
@@ -416,29 +473,34 @@ const App: React.FC = () => {
               </p>
             </div>
             <div className="space-y-3">
-              {(['google', 'apple', 'meta'] as AuthProvider[]).map((provider) => (
-                <button 
-                  key={provider}
-                  disabled={!!isAuthenticating}
-                  onClick={() => handleSocialLogin(provider)}
-                  className={`w-full py-3.5 md:py-4 px-6 border rounded-lg flex items-center justify-between transition-all font-bold text-xs uppercase tracking-widest shadow-sm group haptic-btn ${
-                    isAuthenticating === provider 
-                      ? 'bg-purple-600 border-purple-600 text-white' 
-                      : 'bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:bg-white dark:hover:bg-zinc-800'
-                  }`}
-                >
-                  <span className={isAuthenticating === provider ? '' : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white transition-colors'}>
-                    {isAuthenticating === provider ? t.auth.synchronizing : `${t.auth.continueWith} ${provider}`}
+              <button
+                disabled={!!isAuthenticating}
+                onClick={() => handleSocialLogin('google')}
+                className={`w-full py-3.5 md:py-4 px-6 border rounded-lg flex items-center justify-between transition-all font-bold text-xs uppercase tracking-widest shadow-sm group haptic-btn ${
+                  isAuthenticating === 'google'
+                    ? 'bg-purple-600 border-purple-600 text-white'
+                    : 'bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:bg-white dark:hover:bg-zinc-800'
+                }`}
+              >
+                <span className="flex items-center gap-3">
+                  <svg width="18" height="18" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  <span className={isAuthenticating === 'google' ? '' : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white transition-colors'}>
+                    {isAuthenticating === 'google' ? t.auth.synchronizing : `${t.auth.continueWith} Google`}
                   </span>
-                  {isAuthenticating === provider ? (
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-white">
-                      <path d="M5 12h14M12 5l7 7-7 7"/>
-                    </svg>
-                  )}
-                </button>
-              ))}
+                </span>
+                {isAuthenticating === 'google' ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-white">
+                    <path d="M5 12h14M12 5l7 7-7 7"/>
+                  </svg>
+                )}
+              </button>
             </div>
           </div>
         </div>
