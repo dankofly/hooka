@@ -139,6 +139,7 @@ export interface TranslationObject {
   };
   results: {
     headline: string;
+    copySuccess?: string;
     labels: {
       hook: string;
       script: string;
@@ -149,16 +150,30 @@ export interface TranslationObject {
     };
   };
   history: {
-    headline: string;
+    title?: string;
+    headline?: string;
     empty: string;
   };
-  profiles: {
-    headline: string;
-    saveBtn: string;
-    savePlaceholder: string;
-    loadBtn: string;
+  profileManager: {
+    label: string;
+    sublabel: string;
     empty: string;
-    edit: { title: string; save: string };
+    addButton: string;
+    placeholder: string;
+  };
+  profileEdit: {
+    title: string;
+    subtitle: string;
+    fields: {
+      name: string;
+      brand: string;
+      email: string;
+      phone: string;
+    };
+    cancel: string;
+    save: string;
+    saving: string;
+    saved: string;
   };
   neuroHelp: Record<string, { title: string; desc: string } | string>;
   errors: {
@@ -167,27 +182,64 @@ export interface TranslationObject {
     invalidProviderOpenAI: string;
     scoutError: string;
     engineError: string;
+    profileSyncFailed?: string;
   };
-  consent: {
-    message: string;
-    accept: string;
+  legal: {
+    consent: {
+      title: string;
+      text: string;
+      button: string;
+    };
+    impressum: {
+      title: string;
+      h5: string;
+      hContact: string;
+      hAuthority: string;
+      hUid: string;
+      hCompany: string;
+      companyText: string;
+      memberText: string;
+      hLaw: string;
+      hOdr: string;
+      odrText: string;
+      hDispute: string;
+      disputeText: string;
+    };
+    privacy: {
+      title: string;
+      h1: string;
+      t1: string;
+      h2: string;
+      h3: string;
+      t3a: string;
+      t3b: string;
+      t3c: string;
+      h4: string;
+      t4a: string;
+      t4b: string;
+      h5: string;
+      t5: string;
+    };
   };
-  impressum: { title: string; content: string };
-  privacy: { title: string; content: string };
   admin: {
     title: string;
-    password: string;
-    login: string;
-    stats: {
-      users: string;
-      hooks: string;
-      apiCalls: string;
-      tokens: string;
-    };
-    prompt: {
-      title: string;
-      placeholder: string;
-      save: string;
-    };
+    subtitle: string;
+    disconnect: string;
+    authReq: string;
+    accessKey: string;
+    decrypting: string;
+    initiate: string;
+    metrics: string;
+    users: string;
+    hooks: string;
+    throughput: string;
+    tokens: string;
+    neuralAct: string;
+    editMode: string;
+    instructions: string;
+    live: string;
+    compiling: string;
+    commit: string;
+    placeholder: string;
   };
 }
