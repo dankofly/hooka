@@ -2,14 +2,36 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { neon } from '@netlify/neon';
 
-const headers = {
-  "Access-Control-Allow-Origin": "*", // Note: In production, strict specific origins are recommended
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+// SECURITY: Restrict CORS to allowed origins
+const ALLOWED_ORIGINS = [
+  "https://hypeakz.io",
+  "https://www.hypeakz.io",
+  "https://hypeakz.netlify.app",
+  process.env.ALLOWED_ORIGIN // Optional custom origin from env
+].filter(Boolean);
+
+const getCorsOrigin = (requestOrigin: string | undefined) => {
+  // In development (localhost), allow the request
+  if (requestOrigin?.includes("localhost") || requestOrigin?.includes("127.0.0.1")) {
+    return requestOrigin;
+  }
+  // In production, only allow whitelisted origins
+  if (requestOrigin && ALLOWED_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  // Default to primary domain
+  return "https://hypeakz.io";
 };
 
-// SECURITY: Use Environment Variable or fallback only for local dev to avoid build breaks
-const ADMIN_PASS = process.env.ADMIN_PASSWORD || "377oub377";
+const getHeaders = (requestOrigin?: string) => ({
+  "Access-Control-Allow-Origin": getCorsOrigin(requestOrigin),
+  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+});
+
+// SECURITY: Admin password MUST be set via environment variable
+// If not set, admin functionality is disabled
+const ADMIN_PASS = process.env.ADMIN_PASSWORD;
 
 const getSql = () => {
   const url = process.env.NETLIFY_DATABASE_URL;
@@ -88,13 +110,17 @@ ${customTuning ? `\nADMIN OVERRIDE:\n${customTuning}` : ''}
 `;
 
 export const handler = async (event: any) => {
+  // Get origin from request headers for CORS
+  const requestOrigin = event.headers?.origin || event.headers?.Origin;
+  const headers = getHeaders(requestOrigin);
+
   if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "" };
   if (event.httpMethod !== "POST") return { statusCode: 405, headers, body: "Method Not Allowed" };
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     const sql = getSql();
-    
+
     if (!apiKey && !sql) return { statusCode: 500, headers, body: JSON.stringify({ error: "Configuration Error" }) };
 
     let body;
@@ -166,13 +192,21 @@ export const handler = async (event: any) => {
 
       // --- ADMIN OPERATIONS ---
       case 'verify-admin': {
+        // If no admin password is configured, admin access is disabled
+        if (!ADMIN_PASS) {
+          result = { success: false };
+          break;
+        }
         const isValid = payload.password === ADMIN_PASS;
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 300)); // Prevent timing attacks
         result = { success: isValid };
         break;
       }
       case 'get-admin-stats': {
-         if (payload.password !== ADMIN_PASS) return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
+         // Admin disabled if no password configured
+         if (!ADMIN_PASS || payload.password !== ADMIN_PASS) {
+           return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
+         }
          if (!sql) { result = { userCount: 0, historyCount: 0, apiCalls: 0, tokenCount: 0 }; break; }
          try {
            const [u, h, a, t] = await Promise.all([
@@ -192,7 +226,10 @@ export const handler = async (event: any) => {
         break;
       }
       case 'save-admin-prompt': {
-        if (payload.password !== ADMIN_PASS) return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
+        // Admin disabled if no password configured
+        if (!ADMIN_PASS || payload.password !== ADMIN_PASS) {
+          return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
+        }
         if (!sql) throw new Error("No Database");
         await sql`INSERT INTO hypeakz_settings (key, value) VALUES ('system_prompt', ${payload.prompt}) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`;
         result = { success: true };
