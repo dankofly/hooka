@@ -1,12 +1,21 @@
 
 import React, { useState } from 'react';
-import { MarketingBrief, Language, NeuroScores, TranslationObject } from '../types.ts';
+import { MarketingBrief, NeuroScores, TranslationObject } from '../types.ts';
 import { researchBrand } from '../services/gemini.ts';
 import { analytics } from '../services/analytics.ts';
 
+// Constants
+const MAX_TRIGGER_WORDS = 3;
+const DEFAULT_NEURO_SCORES: NeuroScores = {
+  patternInterrupt: 70,
+  emotionalIntensity: 70,
+  curiosityGap: 70,
+  scarcity: 50
+};
+
 interface BriefEditorProps {
   brief: MarketingBrief;
-  onChange: (key: keyof MarketingBrief, value: any) => void;
+  onChange: (key: keyof MarketingBrief, value: MarketingBrief[keyof MarketingBrief]) => void;
   disabled: boolean;
   onAutoFill?: (data: Partial<MarketingBrief>) => void;
   t: TranslationObject;
@@ -60,12 +69,7 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
   };
 
   const handleScoreChange = (key: keyof NeuroScores, value: number) => {
-    const currentScores = brief.targetScores || {
-      patternInterrupt: 70,
-      emotionalIntensity: 70,
-      curiosityGap: 70,
-      scarcity: 50
-    };
+    const currentScores = brief.targetScores || DEFAULT_NEURO_SCORES;
     onChange('targetScores', { ...currentScores, [key]: value });
   };
 
@@ -75,7 +79,7 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
     if (currentList.includes(word)) {
       newList = currentList.filter(w => w !== word);
     } else {
-      if (currentList.length >= 3) return; // Max 3 selection
+      if (currentList.length >= MAX_TRIGGER_WORDS) return;
       newList = [...currentList, word];
     }
     onChange('triggerWords', newList);
@@ -85,48 +89,48 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
     if (!customTrigger.trim()) return;
     const word = customTrigger.trim();
     const currentList = brief.triggerWords || [];
-    
+
     // Check duplication
     if (currentList.includes(word)) {
       setCustomTrigger('');
       return;
     }
 
-    if (currentList.length >= 3) {
-      return; 
+    if (currentList.length >= MAX_TRIGGER_WORDS) {
+      return;
     }
-    
+
     onChange('triggerWords', [...currentList, word]);
     setCustomTrigger('');
   };
 
-  const scores = brief.targetScores || {
-    patternInterrupt: 70,
-    emotionalIntensity: 70,
-    curiosityGap: 70,
-    scarcity: 50
-  };
+  const scores = brief.targetScores || DEFAULT_NEURO_SCORES;
 
   const inputClasses = "w-full p-4 md:p-5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all text-sm md:text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 font-medium shadow-sm";
   const labelClasses = "block text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.2em] mb-2 md:mb-3 px-1 antialiased";
 
-  const LabelWithHelp = ({ label, helpKey }: { label: string, helpKey: string }) => (
+  const LabelWithHelp = ({ label, helpKey, htmlFor }: { label: string, helpKey: string, htmlFor?: string }) => (
     <div className="flex items-center gap-2 mb-2 md:mb-3">
-      <label className="text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.2em] px-1 antialiased cursor-default">
+      <label
+        htmlFor={htmlFor}
+        className="text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.2em] px-1 antialiased cursor-default"
+      >
         {label}
       </label>
       <button
+        type="button"
         onClick={(e) => {
           e.preventDefault();
           setActiveHelp(activeHelp === helpKey ? null : helpKey);
         }}
+        aria-label={`Help for ${label}`}
         className={`w-4 h-4 flex items-center justify-center rounded-full border transition-all ${
-           activeHelp === helpKey 
-           ? 'border-purple-500 text-purple-500 bg-purple-500/10' 
+           activeHelp === helpKey
+           ? 'border-purple-500 text-purple-500 bg-purple-500/10'
            : 'border-zinc-300 dark:border-zinc-700 text-zinc-300 dark:text-zinc-600 hover:border-purple-400 hover:text-purple-400'
         }`}
       >
-        <span className="text-[9px] font-bold">i</span>
+        <span className="text-[9px] font-bold" aria-hidden="true">i</span>
       </button>
     </div>
   );
@@ -144,42 +148,50 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
     );
   };
 
-  const SelectField = ({ label, value, options, onChangeKey, helpKey }: { label: string, value: string | undefined, options: string[], onChangeKey: keyof MarketingBrief, helpKey?: string }) => (
-    <div className="space-y-1">
-      {helpKey ? <LabelWithHelp label={label} helpKey={helpKey} /> : <label className={labelClasses}>{label}</label>}
-      {helpKey && <ActiveHelpText helpKey={helpKey} />}
-      <div className="relative">
-        <select
-          value={value || ""}
-          onChange={(e) => onChange(onChangeKey, e.target.value)}
-          disabled={disabled}
-          className={`${inputClasses} appearance-none cursor-pointer`}
-        >
-          <option value="">{brief.language === 'DE' ? 'Automatisch' : 'Auto-Select'}</option>
-          {options.map((opt, idx) => (
-            <option key={idx} value={opt}>{opt}</option>
-          ))}
-        </select>
-        <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
-           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="6 9 12 15 18 9"/></svg>
+  const SelectField = ({ label, value, options, onChangeKey, helpKey }: { label: string, value: string | undefined, options: string[], onChangeKey: keyof MarketingBrief, helpKey?: string }) => {
+    const fieldId = `field-${onChangeKey}`;
+    return (
+      <div className="space-y-1">
+        {helpKey ? <LabelWithHelp label={label} helpKey={helpKey} htmlFor={fieldId} /> : <label htmlFor={fieldId} className={labelClasses}>{label}</label>}
+        {helpKey && <ActiveHelpText helpKey={helpKey} />}
+        <div className="relative">
+          <select
+            id={fieldId}
+            value={value || ""}
+            onChange={(e) => onChange(onChangeKey, e.target.value)}
+            disabled={disabled}
+            className={`${inputClasses} appearance-none cursor-pointer`}
+          >
+            <option value="">{brief.language === 'DE' ? 'Automatisch' : 'Auto-Select'}</option>
+            {options.map((opt, idx) => (
+              <option key={idx} value={opt}>{opt}</option>
+            ))}
+          </select>
+          <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
+             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
-  const Slider = ({ label, value, onChange }: { label: string, value: number, onChange: (v: number) => void }) => (
+  const Slider = ({ label, value, onChange, id }: { label: string, value: number, onChange: (v: number) => void, id: string }) => (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <label className={labelClasses.replace("mb-2 md:mb-3", "mb-0")}>{label}</label>
-        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-mono w-10 text-right">{value}%</span>
+        <label htmlFor={id} className={labelClasses.replace("mb-2 md:mb-3", "mb-0")}>{label}</label>
+        <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 font-mono w-10 text-right" aria-live="polite">{value}%</span>
       </div>
       <input
+        id={id}
         type="range"
         min="0"
         max="100"
         value={value}
         onChange={(e) => onChange(parseInt(e.target.value))}
         disabled={disabled}
+        aria-valuenow={value}
+        aria-valuemin={0}
+        aria-valuemax={100}
         className="w-full h-2 bg-zinc-200 dark:bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-500/30"
       />
     </div>
@@ -294,9 +306,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6 md:gap-y-10 mb-12">
           <div className="space-y-1">
-            <LabelWithHelp label={t.briefing.fields.context.label} helpKey="core_context" />
+            <LabelWithHelp label={t.briefing.fields.context.label} helpKey="core_context" htmlFor="field-context" />
             <ActiveHelpText helpKey="core_context" customText={t.briefing.fields.context.help} />
             <textarea
+              id="field-context"
               className={`${inputClasses} resize-none min-h-[140px] md:min-h-[160px] leading-relaxed`}
               value={brief.productContext}
               onChange={(e) => onChange('productContext', e.target.value)}
@@ -305,9 +318,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
             />
           </div>
           <div className="space-y-1">
-            <LabelWithHelp label={t.briefing.fields.goal.label} helpKey="core_goal" />
+            <LabelWithHelp label={t.briefing.fields.goal.label} helpKey="core_goal" htmlFor="field-goal" />
             <ActiveHelpText helpKey="core_goal" customText={t.briefing.fields.goal.help} />
             <textarea
+              id="field-goal"
               className={`${inputClasses} resize-none min-h-[140px] md:min-h-[160px] leading-relaxed`}
               value={brief.goal}
               onChange={(e) => onChange('goal', e.target.value)}
@@ -316,9 +330,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
             />
           </div>
           <div className="space-y-1">
-            <LabelWithHelp label={t.briefing.fields.audience.label} helpKey="core_audience" />
+            <LabelWithHelp label={t.briefing.fields.audience.label} helpKey="core_audience" htmlFor="field-audience" />
             <ActiveHelpText helpKey="core_audience" customText={t.briefing.fields.audience.help} />
             <input
+              id="field-audience"
               type="text"
               className={inputClasses}
               value={brief.targetAudience}
@@ -328,9 +343,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
             />
           </div>
           <div className="space-y-1">
-            <LabelWithHelp label={t.briefing.fields.speaker.label} helpKey="core_speaker" />
+            <LabelWithHelp label={t.briefing.fields.speaker.label} helpKey="core_speaker" htmlFor="field-speaker" />
             <ActiveHelpText helpKey="core_speaker" customText={t.briefing.fields.speaker.help} />
             <input
+              id="field-speaker"
               type="text"
               className={inputClasses}
               value={brief.speaker}
@@ -356,9 +372,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                      </h4>
                      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-6">
                         <div className="space-y-1">
-                           <LabelWithHelp label={t.briefing.nlp.labels.focusKeyword} helpKey="focusKeyword" />
+                           <LabelWithHelp label={t.briefing.nlp.labels.focusKeyword} helpKey="focusKeyword" htmlFor="field-focusKeyword" />
                            <ActiveHelpText helpKey="focusKeyword" />
                            <input
+                              id="field-focusKeyword"
                               type="text"
                               className={inputClasses}
                               value={brief.focusKeyword || ''}
@@ -432,12 +449,13 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                               </div>
                               
                               <div className="relative group/trigger">
-                                  <LabelWithHelp label={t.briefing.nlp.labels.customTrigger} helpKey="customTrigger" />
+                                  <LabelWithHelp label={t.briefing.nlp.labels.customTrigger} helpKey="customTrigger" htmlFor="field-customTrigger" />
                                   <ActiveHelpText helpKey="customTrigger" />
-                                  
+
                                   <div className="relative">
-                                     <input 
-                                        type="text" 
+                                     <input
+                                        id="field-customTrigger"
+                                        type="text"
                                         value={customTrigger}
                                         onChange={(e) => setCustomTrigger(e.target.value)}
                                         onKeyDown={(e) => e.key === 'Enter' && addCustomTrigger()}
@@ -445,12 +463,14 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                                         className={`${inputClasses} pr-12`}
                                         disabled={disabled}
                                      />
-                                     <button 
+                                     <button
+                                       type="button"
                                        onClick={addCustomTrigger}
                                        disabled={!customTrigger.trim() || disabled}
+                                       aria-label="Add custom trigger word"
                                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-md text-zinc-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-all disabled:opacity-30"
                                      >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                                      </button>
                                   </div>
                                </div>
@@ -504,25 +524,29 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
               )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:gap-12">
-                 <Slider 
-                    label={t.results.labels.pattern} 
-                    value={scores.patternInterrupt} 
-                    onChange={(v) => handleScoreChange('patternInterrupt', v)} 
+                 <Slider
+                    id="slider-pattern"
+                    label={t.results.labels.pattern}
+                    value={scores.patternInterrupt}
+                    onChange={(v) => handleScoreChange('patternInterrupt', v)}
                  />
-                 <Slider 
-                    label={t.results.labels.intensity} 
-                    value={scores.emotionalIntensity} 
-                    onChange={(v) => handleScoreChange('emotionalIntensity', v)} 
+                 <Slider
+                    id="slider-intensity"
+                    label={t.results.labels.intensity}
+                    value={scores.emotionalIntensity}
+                    onChange={(v) => handleScoreChange('emotionalIntensity', v)}
                  />
-                 <Slider 
-                    label={t.results.labels.gap} 
-                    value={scores.curiosityGap} 
-                    onChange={(v) => handleScoreChange('curiosityGap', v)} 
+                 <Slider
+                    id="slider-gap"
+                    label={t.results.labels.gap}
+                    value={scores.curiosityGap}
+                    onChange={(v) => handleScoreChange('curiosityGap', v)}
                  />
-                 <Slider 
-                    label={t.results.labels.fomo} 
-                    value={scores.scarcity} 
-                    onChange={(v) => handleScoreChange('scarcity', v)} 
+                 <Slider
+                    id="slider-fomo"
+                    label={t.results.labels.fomo}
+                    value={scores.scarcity}
+                    onChange={(v) => handleScoreChange('scarcity', v)}
                  />
               </div>
             </div>

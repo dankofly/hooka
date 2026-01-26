@@ -1,12 +1,16 @@
 
 import { HistoryItem, BriefProfile, UserProfile } from '../types.ts';
 
+// Constants
+const API_TIMEOUT_MS = 5000; // 5 seconds timeout for DB calls
+const MAX_LOCAL_HISTORY_ITEMS = 50;
+
 // Local Storage Keys
 const LS_KEYS = {
   USER: 'hypeakz_db_user_backup',
   HISTORY: 'hypeakz_db_history_backup',
   PROFILES: 'hypeakz_db_profiles_backup'
-};
+} as const;
 
 // Safe Storage Wrapper (Handles Private Mode / Quota Exceeded)
 const storage = {
@@ -27,10 +31,13 @@ const storage = {
   }
 };
 
+// API response type
+type ApiResponse<T = unknown> = T | null;
+
 // Helper to call the API with Timeout
-const callApi = async (action: string, payload: any = {}) => {
+const callApi = async <T = unknown>(action: string, payload: Record<string, unknown> = {}): Promise<ApiResponse<T>> => {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s Timeout
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
   try {
     const response = await fetch('/.netlify/functions/api', {
@@ -78,8 +85,8 @@ const localStore = {
   },
   saveHistoryItem: (item: HistoryItem) => {
     const current = localStore.getHistory();
-    // Prevent duplicates based on ID
-    const updated = [item, ...current.filter(i => i.id !== item.id)].slice(0, 50);
+    // Prevent duplicates based on ID, limit to max items
+    const updated = [item, ...current.filter(i => i.id !== item.id)].slice(0, MAX_LOCAL_HISTORY_ITEMS);
     storage.set(LS_KEYS.HISTORY, JSON.stringify(updated));
   },
   getProfiles: (): BriefProfile[] => {
@@ -104,8 +111,8 @@ export const db = {
     callApi('init-db').catch(() => {});
   },
 
-  async logEvent(eventName: string, metadata: any = {}) {
-    const id = Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
+  async logEvent(eventName: string, metadata: Record<string, unknown> = {}) {
+    const id = Date.now().toString() + '-' + Math.random().toString(36).substring(2, 11);
     callApi('log-analytics', { id, eventName, timestamp: Date.now(), metadata }).catch(() => {});
   },
 
