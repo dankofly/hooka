@@ -5,7 +5,7 @@ import Stripe from 'stripe';
 
 // Initialize Stripe (only if key is available)
 const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-12-18.acacia' })
+  ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
 
 // Stripe Price ID for €10/month subscription (set in Netlify env vars)
@@ -268,8 +268,17 @@ export const handler = async (event: any) => {
 
       // --- STRIPE CHECKOUT ---
       case 'create-checkout': {
-        if (!stripe || !STRIPE_PRICE_ID) {
-          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured" }) };
+        // Debug: Check what's configured
+        const stripeConfigured = !!stripe;
+        const priceConfigured = !!STRIPE_PRICE_ID;
+
+        if (!stripeConfigured) {
+          console.error("Stripe not initialized - STRIPE_SECRET_KEY missing");
+          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing secret key)" }) };
+        }
+        if (!priceConfigured) {
+          console.error("STRIPE_PRICE_ID not set");
+          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing price ID)" }) };
         }
 
         const { userId, userEmail, successUrl, cancelUrl } = payload;
@@ -293,8 +302,11 @@ export const handler = async (event: any) => {
 
           result = { sessionId: session.id, url: session.url };
         } catch (stripeError: any) {
-          console.error("Stripe Error:", stripeError);
-          return { statusCode: 500, headers, body: JSON.stringify({ error: stripeError.message }) };
+          console.error("Stripe Checkout Error:", stripeError.message, stripeError.type);
+          return { statusCode: 500, headers, body: JSON.stringify({
+            error: stripeError.message || "Stripe checkout failed",
+            type: stripeError.type
+          }) };
         }
         break;
       }

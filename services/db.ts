@@ -258,17 +258,38 @@ export const db = {
 
   /**
    * Create a Stripe checkout session and return the URL
+   * Throws an error with the message from the API if checkout fails
    */
   async createCheckoutSession(userId: string, userEmail: string): Promise<string | null> {
     const baseUrl = window.location.origin;
-    const result = await callApi<{ url: string; sessionId: string }>('create-checkout', {
-      userId,
-      userEmail,
-      successUrl: `${baseUrl}/?checkout=success`,
-      cancelUrl: `${baseUrl}/?checkout=cancelled`
-    });
 
-    return result?.url || null;
+    try {
+      const response = await fetch('/.netlify/functions/api', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'create-checkout',
+          payload: {
+            userId,
+            userEmail,
+            successUrl: `${baseUrl}/?checkout=success`,
+            cancelUrl: `${baseUrl}/?checkout=cancelled`
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Throw the error message from the API
+        throw new Error(data.error || `Checkout failed (${response.status})`);
+      }
+
+      return data?.url || null;
+    } catch (error: any) {
+      console.error('createCheckoutSession error:', error);
+      throw error;
+    }
   },
 
   /**

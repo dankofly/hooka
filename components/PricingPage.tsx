@@ -39,10 +39,11 @@ export const PricingPage: React.FC<PricingPageProps> = ({
       if (checkoutUrl) {
         window.location.href = checkoutUrl;
       } else {
-        setError('Checkout konnte nicht gestartet werden.');
+        setError('Checkout konnte nicht gestartet werden. Bitte kontaktiere den Support.');
       }
     } catch (e: any) {
-      setError(e.message || 'Ein Fehler ist aufgetreten.');
+      console.error('Checkout error:', e);
+      setError(e.message || 'Ein Fehler ist aufgetreten. Bitte versuche es später erneut.');
     } finally {
       setIsLoading(false);
     }
