@@ -67,6 +67,12 @@ export interface BriefProfile {
   brief: MarketingBrief;
 }
 
+export interface UserQuota {
+  usedGenerations: number;
+  limit: number;
+  isPremium: boolean;
+}
+
 // Translation object type - defines the structure of translation files
 export interface TranslationObject {
   company: {
@@ -183,6 +189,20 @@ export interface TranslationObject {
     scoutError: string;
     engineError: string;
     profileSyncFailed?: string;
+  };
+  quota: {
+    remaining: string;
+    limitReached: string;
+    upgradeTitle: string;
+    upgradeText: string;
+    upgradeSubtext: string;
+    contactUs: string;
+    contactEmail: string;
+    checkoutButton: string;
+    loginFirst: string;
+    orContact: string;
+    checkoutSuccess: string;
+    checkoutCancelled: string;
   };
   legal: {
     consent: {

@@ -1,6 +1,15 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { neon } from '@netlify/neon';
+import Stripe from 'stripe';
+
+// Initialize Stripe (only if key is available)
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-12-18.acacia' })
+  : null;
+
+// Stripe Price ID for €10/month subscription (set in Netlify env vars)
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
 
 // SECURITY: Restrict CORS to allowed origins
 const ALLOWED_ORIGINS = [
@@ -42,6 +51,9 @@ const getSql = () => {
 // Optimization: Cached Table Initialization Promise to avoid redundant queries per cold start
 let tablesInitPromise: Promise<any> | null = null;
 
+// Quota Constants
+const FREE_GENERATION_LIMIT = 10;
+
 const ensureTables = async (sql: any) => {
   if (tablesInitPromise) return tablesInitPromise;
 
@@ -50,7 +62,8 @@ const ensureTables = async (sql: any) => {
     sql`CREATE TABLE IF NOT EXISTS hypeakz_history (id TEXT PRIMARY KEY, timestamp BIGINT, brief JSONB, concepts JSONB)`,
     sql`CREATE TABLE IF NOT EXISTS hypeakz_profiles (id TEXT PRIMARY KEY, name TEXT, brief JSONB)`,
     sql`CREATE TABLE IF NOT EXISTS hypeakz_analytics (id TEXT PRIMARY KEY, event_name TEXT, timestamp BIGINT, metadata JSONB)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_settings (key TEXT PRIMARY KEY, value TEXT)`
+    sql`CREATE TABLE IF NOT EXISTS hypeakz_settings (key TEXT PRIMARY KEY, value TEXT)`,
+    sql`CREATE TABLE IF NOT EXISTS hypeakz_quotas (user_id TEXT PRIMARY KEY, used_generations INT DEFAULT 0, is_premium BOOLEAN DEFAULT FALSE, stripe_customer_id TEXT, stripe_subscription_id TEXT, created_at BIGINT)`
   ]).catch(e => {
     console.error("Table init error:", e);
     tablesInitPromise = null;
@@ -133,7 +146,7 @@ export const handler = async (event: any) => {
     const { action, payload } = body;
     let result: any = { success: true };
 
-    if (sql && ['log-analytics', 'save-user', 'save-history', 'save-profile', 'save-admin-prompt', 'generate-hooks'].includes(action)) {
+    if (sql && ['log-analytics', 'save-user', 'save-history', 'save-profile', 'save-admin-prompt', 'generate-hooks', 'get-quota', 'increment-quota', 'sync-quota'].includes(action)) {
       await ensureTables(sql);
     }
 
@@ -187,6 +200,141 @@ export const handler = async (event: any) => {
       case 'delete-profile': {
         if (!sql) break;
         await sql`DELETE FROM hypeakz_profiles WHERE id = ${payload.id}`;
+        break;
+      }
+
+      // --- QUOTA OPERATIONS ---
+      case 'get-quota': {
+        if (!sql) {
+          result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
+          break;
+        }
+        const { userId } = payload;
+        if (!userId) {
+          result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
+          break;
+        }
+        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+        if (rows.length === 0) {
+          result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
+        } else {
+          const isPremium = rows[0].is_premium === true;
+          result = {
+            usedGenerations: rows[0].used_generations || 0,
+            limit: FREE_GENERATION_LIMIT,
+            isPremium
+          };
+        }
+        break;
+      }
+      case 'increment-quota': {
+        if (!sql) break;
+        const { userId } = payload;
+        if (!userId) break;
+        // Upsert: Insert if not exists, increment if exists
+        await sql`
+          INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at)
+          VALUES (${userId}, 1, FALSE, ${Date.now()})
+          ON CONFLICT (user_id) DO UPDATE SET used_generations = hypeakz_quotas.used_generations + 1
+        `;
+        break;
+      }
+      case 'sync-quota': {
+        // Sync localStorage count with DB (takes higher value)
+        if (!sql) break;
+        const { userId, localCount } = payload;
+        if (!userId || typeof localCount !== 'number') break;
+
+        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+
+        if (rows.length === 0) {
+          // New user: use localCount
+          await sql`INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at) VALUES (${userId}, ${localCount}, FALSE, ${Date.now()})`;
+          result = { usedGenerations: localCount, limit: FREE_GENERATION_LIMIT, isPremium: false };
+        } else {
+          // Existing user: take the higher value
+          const dbCount = rows[0].used_generations || 0;
+          const isPremium = rows[0].is_premium === true;
+          const finalCount = Math.max(dbCount, localCount);
+
+          if (finalCount > dbCount) {
+            await sql`UPDATE hypeakz_quotas SET used_generations = ${finalCount} WHERE user_id = ${userId}`;
+          }
+
+          result = { usedGenerations: finalCount, limit: FREE_GENERATION_LIMIT, isPremium };
+        }
+        break;
+      }
+
+      // --- STRIPE CHECKOUT ---
+      case 'create-checkout': {
+        if (!stripe || !STRIPE_PRICE_ID) {
+          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured" }) };
+        }
+
+        const { userId, userEmail, successUrl, cancelUrl } = payload;
+        if (!userId || !userEmail) {
+          return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing userId or userEmail" }) };
+        }
+
+        try {
+          const session = await stripe.checkout.sessions.create({
+            mode: 'subscription',
+            payment_method_types: ['card'],
+            customer_email: userEmail,
+            line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
+            success_url: successUrl || 'https://hypeakz.io/?checkout=success',
+            cancel_url: cancelUrl || 'https://hypeakz.io/?checkout=cancelled',
+            metadata: { userId },
+            subscription_data: {
+              metadata: { userId }
+            }
+          });
+
+          result = { sessionId: session.id, url: session.url };
+        } catch (stripeError: any) {
+          console.error("Stripe Error:", stripeError);
+          return { statusCode: 500, headers, body: JSON.stringify({ error: stripeError.message }) };
+        }
+        break;
+      }
+
+      case 'check-subscription': {
+        // Check if user has active subscription (called periodically)
+        if (!sql) {
+          result = { isPremium: false };
+          break;
+        }
+        const { userId } = payload;
+        if (!userId) {
+          result = { isPremium: false };
+          break;
+        }
+
+        const rows = await sql`SELECT is_premium, stripe_subscription_id FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+        if (rows.length === 0 || !rows[0].is_premium) {
+          result = { isPremium: false };
+          break;
+        }
+
+        // Optionally verify with Stripe if subscription is still active
+        if (stripe && rows[0].stripe_subscription_id) {
+          try {
+            const subscription = await stripe.subscriptions.retrieve(rows[0].stripe_subscription_id);
+            const isActive = ['active', 'trialing'].includes(subscription.status);
+            if (!isActive) {
+              // Update DB if subscription is no longer active
+              await sql`UPDATE hypeakz_quotas SET is_premium = FALSE WHERE user_id = ${userId}`;
+              result = { isPremium: false };
+              break;
+            }
+          } catch (e) {
+            // If Stripe check fails, trust the DB
+            console.warn("Stripe subscription check failed:", e);
+          }
+        }
+
+        result = { isPremium: true };
         break;
       }
 

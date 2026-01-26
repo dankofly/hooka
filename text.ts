@@ -285,6 +285,20 @@ export const TRANSLATIONS = {
       missingKey: "SERVER ERROR: API Key Missing.\n\nPlease ensure 'GEMINI_API_KEY' is set in Netlify Environment Variables (WITHOUT VITE_ prefix).",
       invalidProviderOpenAI: "CONFIG ERROR: Falscher API Key Typ.\n\nDu verwendest einen OpenAI Key (sk-...). Diese App benötigt einen GOOGLE GEMINI Key (AIza...).\nBitte erstelle einen Key im Google AI Studio.",
       scoutError: "Fehler bei der Website-Analyse."
+    },
+    quota: {
+      remaining: "generations left",
+      limitReached: "Limit Reached",
+      upgradeTitle: "Upgrade to Premium",
+      upgradeText: "You have used all 10 free generations.",
+      upgradeSubtext: "Unlock unlimited viral hooks with Premium access.",
+      contactUs: "Contact us for Premium Access",
+      contactEmail: "mail@danielkofler.com",
+      checkoutButton: "Upgrade Now - €10/month",
+      loginFirst: "Login First",
+      orContact: "Or contact us directly",
+      checkoutSuccess: "Welcome to Premium!",
+      checkoutCancelled: "Checkout cancelled"
     }
   },
 
@@ -560,6 +574,20 @@ export const TRANSLATIONS = {
       missingKey: "SERVER ERROR: API Key Missing.\n\ Bitte stelle sicher, dass 'GEMINI_API_KEY' in den Netlify Environment Variables gesetzt ist (OHNE VITE_ Prefix).",
       invalidProviderOpenAI: "CONFIG ERROR: Falscher API Key Typ.\n\nDu verwendest einen OpenAI Key (sk-...). Diese App benötigt einen GOOGLE GEMINI Key (AIza...).\nBitte erstelle einen Key im Google AI Studio.",
       scoutError: "Fehler bei der Website-Analyse."
+    },
+    quota: {
+      remaining: "Generierungen übrig",
+      limitReached: "Limit erreicht",
+      upgradeTitle: "Upgrade auf Premium",
+      upgradeText: "Du hast alle 10 Gratis-Generierungen aufgebraucht.",
+      upgradeSubtext: "Schalte unbegrenzte virale Hooks mit Premium-Zugang frei.",
+      contactUs: "Kontaktiere uns für Premium-Zugang",
+      contactEmail: "mail@danielkofler.com",
+      checkoutButton: "Jetzt upgraden - €10/Monat",
+      loginFirst: "Erst einloggen",
+      orContact: "Oder kontaktiere uns direkt",
+      checkoutSuccess: "Willkommen bei Premium!",
+      checkoutCancelled: "Checkout abgebrochen"
     }
   }
 };

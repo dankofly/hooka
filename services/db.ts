@@ -1,15 +1,17 @@
 
-import { HistoryItem, BriefProfile, UserProfile } from '../types.ts';
+import { HistoryItem, BriefProfile, UserProfile, UserQuota } from '../types.ts';
 
 // Constants
 const API_TIMEOUT_MS = 5000; // 5 seconds timeout for DB calls
 const MAX_LOCAL_HISTORY_ITEMS = 50;
+const FREE_GENERATION_LIMIT = 10;
 
 // Local Storage Keys
 const LS_KEYS = {
   USER: 'hypeakz_db_user_backup',
   HISTORY: 'hypeakz_db_history_backup',
-  PROFILES: 'hypeakz_db_profiles_backup'
+  PROFILES: 'hypeakz_db_profiles_backup',
+  QUOTA: 'hypeakz_generations_used'
 } as const;
 
 // Safe Storage Wrapper (Handles Private Mode / Quota Exceeded)
@@ -170,5 +172,110 @@ export const db = {
   async deleteProfile(id: string) {
     localStore.deleteProfile(id);
     await callApi('delete-profile', { id });
+  },
+
+  // --- QUOTA METHODS ---
+
+  /**
+   * Get current quota for user (logged in) or from localStorage (anonymous)
+   */
+  async getQuota(userId?: string): Promise<UserQuota> {
+    // For logged-in users: fetch from DB
+    if (userId) {
+      const result = await callApi<UserQuota>('get-quota', { userId });
+      if (result) {
+        return result;
+      }
+    }
+
+    // For anonymous users or if DB fails: use localStorage
+    const localCount = this.getLocalQuotaCount();
+    return {
+      usedGenerations: localCount,
+      limit: FREE_GENERATION_LIMIT,
+      isPremium: false
+    };
+  },
+
+  /**
+   * Check if user can generate (has remaining quota)
+   */
+  async canGenerate(userId?: string): Promise<boolean> {
+    const quota = await this.getQuota(userId);
+    if (quota.isPremium) return true;
+    return quota.usedGenerations < quota.limit;
+  },
+
+  /**
+   * Increment quota after successful generation
+   */
+  async incrementQuota(userId?: string): Promise<void> {
+    // Always increment local storage (for anonymous tracking)
+    this.incrementLocalQuotaCount();
+
+    // If logged in, also update DB
+    if (userId) {
+      await callApi('increment-quota', { userId });
+    }
+  },
+
+  /**
+   * Sync localStorage quota with DB on login (takes higher value)
+   */
+  async syncQuotaOnLogin(userId: string): Promise<UserQuota> {
+    const localCount = this.getLocalQuotaCount();
+
+    const result = await callApi<UserQuota>('sync-quota', { userId, localCount });
+    if (result) {
+      // Update local storage with synced value
+      storage.set(LS_KEYS.QUOTA, result.usedGenerations.toString());
+      return result;
+    }
+
+    // Fallback if API fails
+    return {
+      usedGenerations: localCount,
+      limit: FREE_GENERATION_LIMIT,
+      isPremium: false
+    };
+  },
+
+  // --- Local Quota Helpers ---
+
+  getLocalQuotaCount(): number {
+    const stored = storage.get(LS_KEYS.QUOTA);
+    if (!stored) return 0;
+    const parsed = parseInt(stored, 10);
+    return isNaN(parsed) ? 0 : parsed;
+  },
+
+  incrementLocalQuotaCount(): void {
+    const current = this.getLocalQuotaCount();
+    storage.set(LS_KEYS.QUOTA, (current + 1).toString());
+  },
+
+  // --- STRIPE CHECKOUT ---
+
+  /**
+   * Create a Stripe checkout session and return the URL
+   */
+  async createCheckoutSession(userId: string, userEmail: string): Promise<string | null> {
+    const baseUrl = window.location.origin;
+    const result = await callApi<{ url: string; sessionId: string }>('create-checkout', {
+      userId,
+      userEmail,
+      successUrl: `${baseUrl}/?checkout=success`,
+      cancelUrl: `${baseUrl}/?checkout=cancelled`
+    });
+
+    return result?.url || null;
+  },
+
+  /**
+   * Check if user has an active subscription
+   */
+  async checkSubscription(userId: string): Promise<boolean> {
+    const result = await callApi<{ isPremium: boolean }>('check-subscription', { userId });
+    return result?.isPremium || false;
   }
 };

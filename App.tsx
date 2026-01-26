@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { MarketingBrief, ViralConcept, GenerationStatus, HistoryItem, BriefProfile, UserProfile, Language } from './types.ts';
+import { MarketingBrief, ViralConcept, GenerationStatus, HistoryItem, BriefProfile, UserProfile, Language, UserQuota } from './types.ts';
 import { generateViralHooks } from './services/gemini.ts';
 import { db } from './services/db.ts';
 import { analytics } from './services/analytics.ts';
@@ -14,6 +14,7 @@ import { PrivacyPolicyModal } from './components/PrivacyPolicyModal.tsx';
 import { ConsentBanner } from './components/ConsentBanner.tsx';
 import { ProfileEditModal } from './components/ProfileEditModal.tsx';
 import { AdminModal } from './components/AdminModal.tsx';
+import { UpgradeModal } from './components/UpgradeModal.tsx';
 import { TRANSLATIONS } from './text.ts';
 
 const STORAGE_KEY_THEME = 'hypeakz_theme';
@@ -84,6 +85,8 @@ const App: React.FC = () => {
   const [isImpressumOpen, setIsImpressumOpen] = useState(false);
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [quota, setQuota] = useState<UserQuota>({ usedGenerations: 0, limit: 10, isPremium: false });
 
   useEffect(() => {
     const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
@@ -115,6 +118,8 @@ const App: React.FC = () => {
           setUser(existingIdentityUser);
           localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(existingIdentityUser));
         }
+        // Load quota for logged-in user
+        db.syncQuotaOnLogin(existingIdentityUser.id).then(q => setQuota(q)).catch(console.warn);
       }).catch(err => {
         // Fallback to Identity user if DB fails
         setUser(existingIdentityUser);
@@ -150,6 +155,8 @@ const App: React.FC = () => {
             setIsProfileModalOpen(true);
             db.saveUser(profile).catch(err => console.warn("DB save failed", err));
           }
+          // Sync quota on auth state change
+          db.syncQuotaOnLogin(profile.id).then(q => setQuota(q)).catch(console.warn);
         }).catch(() => {
           setUser(profile);
           localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(profile));
@@ -157,6 +164,8 @@ const App: React.FC = () => {
       } else {
         setUser(null);
         localStorage.removeItem(STORAGE_KEY_USER);
+        // Load anonymous quota
+        db.getQuota().then(q => setQuota(q));
       }
     });
 
@@ -166,6 +175,27 @@ const App: React.FC = () => {
       if (h) setHistory(h);
       if (p) setProfiles(p);
     });
+
+    // Load quota (for anonymous users on first load)
+    db.getQuota().then(q => setQuota(q));
+
+    // Handle checkout return URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const checkoutStatus = urlParams.get('checkout');
+    if (checkoutStatus === 'success') {
+      // Reload quota to reflect new premium status
+      setTimeout(() => {
+        const currentUser = authService.getCurrentUser();
+        if (currentUser) {
+          db.getQuota(currentUser.id).then(q => setQuota(q));
+        }
+      }, 1000);
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (checkoutStatus === 'cancelled') {
+      // Clean up URL
+      window.history.replaceState({}, '', window.location.pathname);
+    }
 
     return () => unsubscribe();
   }, []);
@@ -206,6 +236,9 @@ const App: React.FC = () => {
       // Sync DB in background
       db.saveUser(finalUser).catch(err => console.warn("Background DB sync failed", err));
 
+      // Sync quota on login (takes higher of local vs DB value)
+      db.syncQuotaOnLogin(finalUser.id).then(q => setQuota(q)).catch(console.warn);
+
     } catch (err: any) {
       // Don't show error if user just closed the modal
       if (err.message !== 'Authentication cancelled') {
@@ -235,9 +268,18 @@ const App: React.FC = () => {
     authService.logout();
     setUser(null);
     localStorage.removeItem(STORAGE_KEY_USER);
+    // Reload quota for anonymous state
+    db.getQuota().then(q => setQuota(q));
   };
 
   const handleGenerate = async () => {
+    // Check quota before generation
+    const canProceed = await db.canGenerate(user?.id);
+    if (!canProceed) {
+      setIsUpgradeModalOpen(true);
+      return;
+    }
+
     setStatus(GenerationStatus.IDLE); // Clear UI results before start
     setConcepts([]);
     setStatus(GenerationStatus.LOADING);
@@ -249,15 +291,20 @@ const App: React.FC = () => {
       const newItem = { id: Date.now().toString(), timestamp: Date.now(), concepts: results, brief: { ...brief } };
       setHistory(prev => [newItem, ...prev].slice(0, 10));
       setActiveHistoryId(newItem.id);
-      
+
       await db.saveHistoryItem(newItem);
-      
-      analytics.track('generate_hooks', { 
-        count: results.length, 
+
+      // Increment quota after successful generation
+      await db.incrementQuota(user?.id);
+      // Update local quota state
+      setQuota(prev => ({ ...prev, usedGenerations: prev.usedGenerations + 1 }));
+
+      analytics.track('generate_hooks', {
+        count: results.length,
         language: brief.language,
         userId: user?.id || 'anonymous'
       });
-      
+
     } catch (e: any) {
       console.error("Generation Error:", e);
       let msg = e.message || t.errors.engineError;
@@ -418,9 +465,32 @@ const App: React.FC = () => {
             />
           </div>
           <BriefEditor brief={brief} onChange={handleBriefChange} onAutoFill={(d) => setBrief(prev => ({...prev, ...d}))} disabled={status === GenerationStatus.LOADING} t={t} />
-          <div className="flex justify-center py-2 md:py-6">
-            <button 
-              onClick={handleGenerate} 
+          <div className="flex flex-col items-center gap-4 py-2 md:py-6">
+            {/* Quota Display */}
+            {!quota.isPremium && (
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800">
+                  <div className="flex gap-1">
+                    {Array.from({ length: quota.limit }).map((_, i) => (
+                      <div
+                        key={i}
+                        className={`w-2 h-2 rounded-full transition-all ${
+                          i < quota.usedGenerations
+                            ? 'bg-zinc-400 dark:bg-zinc-600'
+                            : 'bg-purple-500'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider ml-1">
+                    {quota.limit - quota.usedGenerations} {t.quota.remaining}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={handleGenerate}
               disabled={status === GenerationStatus.LOADING}
               className={`group relative overflow-hidden w-full md:w-auto px-8 py-5 md:px-20 md:py-8 rounded-xl md:rounded-2xl font-black text-xs uppercase tracking-[0.3em] md:tracking-[0.4em] transition-all duration-700 antialiased ${
                 status === GenerationStatus.LOADING ? 'bg-zinc-100 dark:bg-zinc-900 text-zinc-400 cursor-wait' : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 shadow-[0_20px_80px_-20px_rgba(0,0,0,0.3)] dark:shadow-[0_20px_80px_-20px_rgba(255,255,255,0.1)] hover:scale-[1.02] active:scale-[0.98]'
@@ -489,6 +559,18 @@ const App: React.FC = () => {
       <ImpressumModal isOpen={isImpressumOpen} t={t} onClose={() => setIsImpressumOpen(false)} />
       <PrivacyPolicyModal isOpen={isPrivacyOpen} t={t} onClose={() => setIsPrivacyOpen(false)} />
       <AdminModal isOpen={isAdminOpen} t={t} onClose={() => setIsAdminOpen(false)} />
+      <UpgradeModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        t={t}
+        usedGenerations={quota.usedGenerations}
+        limit={quota.limit}
+        user={user}
+        onLoginRequired={() => {
+          setIsUpgradeModalOpen(false);
+          handleLogin();
+        }}
+      />
     </div>
   );
 };
