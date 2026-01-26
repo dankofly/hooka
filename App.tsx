@@ -15,6 +15,8 @@ import { ConsentBanner } from './components/ConsentBanner.tsx';
 import { ProfileEditModal } from './components/ProfileEditModal.tsx';
 import { AdminModal } from './components/AdminModal.tsx';
 import { UpgradeModal } from './components/UpgradeModal.tsx';
+import { QuotaCounter } from './components/QuotaCounter.tsx';
+import { PricingPage } from './components/PricingPage.tsx';
 import { TRANSLATIONS } from './text.ts';
 
 const STORAGE_KEY_THEME = 'hypeakz_theme';
@@ -86,6 +88,7 @@ const App: React.FC = () => {
   const [isPrivacyOpen, setIsPrivacyOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [quota, setQuota] = useState<UserQuota>({ usedGenerations: 0, limit: 10, isPremium: false });
 
   useEffect(() => {
@@ -340,7 +343,23 @@ const App: React.FC = () => {
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <Logo text={t.nav.logoText} />
           <div className="flex items-center gap-3 md:gap-6">
-            
+
+            {/* Quota Counter in Navbar */}
+            <QuotaCounter
+              quota={quota}
+              t={t}
+              onUpgradeClick={() => setIsPricingOpen(true)}
+              variant="navbar"
+            />
+
+            {/* Pricing Link */}
+            <button
+              onClick={() => setIsPricingOpen(true)}
+              className="hidden md:block text-[10px] font-black text-zinc-500 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors"
+            >
+              {t.pricing.title}
+            </button>
+
             <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-lg p-1 border border-zinc-200 dark:border-zinc-800">
               {(['DE', 'EN'] as Language[]).map((lang) => (
                 <button
@@ -466,28 +485,13 @@ const App: React.FC = () => {
           </div>
           <BriefEditor brief={brief} onChange={handleBriefChange} onAutoFill={(d) => setBrief(prev => ({...prev, ...d}))} disabled={status === GenerationStatus.LOADING} t={t} />
           <div className="flex flex-col items-center gap-4 py-2 md:py-6">
-            {/* Quota Display */}
-            {!quota.isPremium && (
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-900 rounded-full border border-zinc-200 dark:border-zinc-800">
-                  <div className="flex gap-1">
-                    {Array.from({ length: quota.limit }).map((_, i) => (
-                      <div
-                        key={i}
-                        className={`w-2 h-2 rounded-full transition-all ${
-                          i < quota.usedGenerations
-                            ? 'bg-zinc-400 dark:bg-zinc-600'
-                            : 'bg-purple-500'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider ml-1">
-                    {quota.limit - quota.usedGenerations} {t.quota.remaining}
-                  </span>
-                </div>
-              </div>
-            )}
+            {/* Quota Display - Enhanced Counter */}
+            <QuotaCounter
+              quota={quota}
+              t={t}
+              onUpgradeClick={() => setIsPricingOpen(true)}
+              variant="default"
+            />
 
             <button
               onClick={handleGenerate}
@@ -568,6 +572,17 @@ const App: React.FC = () => {
         user={user}
         onLoginRequired={() => {
           setIsUpgradeModalOpen(false);
+          handleLogin();
+        }}
+      />
+      <PricingPage
+        isOpen={isPricingOpen}
+        onClose={() => setIsPricingOpen(false)}
+        t={t}
+        user={user}
+        quota={quota}
+        onLoginRequired={() => {
+          setIsPricingOpen(false);
           handleLogin();
         }}
       />
