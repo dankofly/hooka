@@ -206,7 +206,33 @@ export interface TranslationObject {
     checkoutCancelled: string;
     upgradeCta: string;
   };
+  whyHooka: {
+    navTitle: string;
+    badge: string;
+    headline: string;
+    subheadline: string;
+    problemTitle: string;
+    problemText: string;
+    solutionTitle: string;
+    solutionText: string;
+    tag1: string;
+    tag2: string;
+    tag3: string;
+    featuresTitle: string;
+    feature1Title: string;
+    feature1Desc: string;
+    feature2Title: string;
+    feature2Desc: string;
+    feature3Title: string;
+    feature3Desc: string;
+    autoBriefingTitle: string;
+    autoBriefingText: string;
+    ctaTitle: string;
+    ctaSubtitle: string;
+    ctaButton: string;
+  };
   pricing: {
+    navTitle: string;
     title: string;
     badge: string;
     headline: string;

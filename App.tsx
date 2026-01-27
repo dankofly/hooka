@@ -17,6 +17,7 @@ import { AdminModal } from './components/AdminModal.tsx';
 import { UpgradeModal } from './components/UpgradeModal.tsx';
 import { QuotaCounter } from './components/QuotaCounter.tsx';
 import { PricingPage } from './components/PricingPage.tsx';
+import { WhyHookaPage } from './components/WhyHookaPage.tsx';
 import { TRANSLATIONS } from './text.ts';
 
 const STORAGE_KEY_THEME = 'hypeakz_theme';
@@ -89,6 +90,7 @@ const App: React.FC = () => {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
+  const [isWhyHookaOpen, setIsWhyHookaOpen] = useState(false);
   const [quota, setQuota] = useState<UserQuota>({ usedGenerations: 0, limit: 10, isPremium: false });
 
   useEffect(() => {
@@ -344,20 +346,20 @@ const App: React.FC = () => {
           <Logo text={t.nav.logoText} />
           <div className="flex items-center gap-3 md:gap-6">
 
-            {/* Quota Counter in Navbar */}
-            <QuotaCounter
-              quota={quota}
-              t={t}
-              onUpgradeClick={() => setIsPricingOpen(true)}
-              variant="navbar"
-            />
+            {/* Why Hooka Link */}
+            <button
+              onClick={() => setIsWhyHookaOpen(true)}
+              className="hidden md:block text-[10px] font-black text-zinc-500 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors"
+            >
+              {t.whyHooka.navTitle}
+            </button>
 
             {/* Pricing Link */}
             <button
               onClick={() => setIsPricingOpen(true)}
               className="hidden md:block text-[10px] font-black text-zinc-500 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors"
             >
-              {t.pricing.title}
+              {t.pricing.navTitle}
             </button>
 
             <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-lg p-1 border border-zinc-200 dark:border-zinc-800">
@@ -585,6 +587,11 @@ const App: React.FC = () => {
           setIsPricingOpen(false);
           handleLogin();
         }}
+      />
+      <WhyHookaPage
+        isOpen={isWhyHookaOpen}
+        onClose={() => setIsWhyHookaOpen(false)}
+        t={t}
       />
     </div>
   );
