@@ -548,12 +548,15 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         }
 
         const config: any = {
-            responseMimeType: "application/json",
             temperature: 0.3 // Lower temperature for more factual extraction
         };
 
         if (useSearchTool) {
+            // Note: responseMimeType (JSON mode) is NOT compatible with Google Search tool
             config.tools = [{googleSearch: {}}];
+        } else {
+            // Only use JSON mode when NOT using search tool
+            config.responseMimeType = "application/json";
         }
 
         const response = await ai.models.generateContent({
