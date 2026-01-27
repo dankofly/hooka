@@ -75,9 +75,8 @@ const ensureTables = async (sql: any) => {
 const fetchUrlContent = async (targetUrl: string): Promise<string | null> => {
   try {
     const controller = new AbortController();
-    // OPTIMIZED TIMEOUT: 7 seconds. 
-    // Gives Jina enough time to render JS-heavy sites, but leaves 3s for Gemini (in a 10s Netlify Function limit).
-    const timeoutId = setTimeout(() => controller.abort(), 7000);
+    // OPTIMIZED TIMEOUT: 12 seconds for Jina to properly render JS-heavy sites
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
 
     let urlToScrape = targetUrl.trim();
     if (!urlToScrape.startsWith('http')) {
@@ -90,27 +89,39 @@ const fetchUrlContent = async (targetUrl: string): Promise<string | null> => {
     const response = await fetch(scrapeUrl, {
       signal: controller.signal,
       headers: {
-        'Accept': 'text/plain', // Request clean text/markdown
+        'Accept': 'text/plain',
         'X-Return-Format': 'markdown',
-        'X-With-Generated-Alt': 'true', // Get alt text for images to understand context
-        'User-Agent': 'Hypeakz-Scanner/1.0'
+        'X-With-Generated-Alt': 'true',
+        'X-With-Links-Summary': 'true', // Include link summaries for better context
+        'X-Target-Selector': 'main, article, .content, #content, .main, body', // Focus on main content
+        'User-Agent': 'Mozilla/5.0 (compatible; Hypeakz-Scanner/2.0; +https://hypeakz.io)'
       }
     });
-    
+
     clearTimeout(timeoutId);
 
     if (!response.ok) return null;
-    
-    const text = await response.text();
-    
-    // Validation: Filter out Jina error pages or empty results
-    if (text.length < 100 || (text.includes("Jina Reader") && text.includes("Error"))) return null;
-    if (text.includes("Cloudflare") || text.includes("Verify you are human") || text.includes("Access denied")) return null;
 
-    return text.substring(0, 35000); // Increased buffer to capture more context
+    const text = await response.text();
+
+    // Validation: Filter out Jina error pages or empty results
+    if (text.length < 150 || (text.includes("Jina Reader") && text.includes("Error"))) return null;
+    if (text.includes("Cloudflare") || text.includes("Verify you are human") || text.includes("Access denied")) return null;
+    if (text.includes("404") && text.includes("not found")) return null;
+    if (text.includes("Page not found") || text.includes("Seite nicht gefunden")) return null;
+
+    // Clean up common noise
+    let cleanedText = text
+      .replace(/\[Skip to.*?\]/gi, '')
+      .replace(/Cookie.*?akzeptieren/gi, '')
+      .replace(/Accept.*?cookies/gi, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    return cleanedText.substring(0, 50000); // Increased buffer for more context
   } catch (e) {
-    // Fail silently so fallback (Google Search) can take over
-    return null; 
+    console.log("Jina scrape failed, will use fallback:", e);
+    return null;
   }
 };
 
@@ -471,56 +482,74 @@ export const handler = async (event: any) => {
         if (!apiKey) throw new Error("Missing API Key");
         const ai = new GoogleGenAI({ apiKey });
         const { url, language } = payload;
-        
+
         if (!url) throw new Error("URL Required");
 
         // 1. Try Jina AI Scrape (The Bridge)
         const scrapedMarkdown = await fetchUrlContent(url);
-        
+
         let prompt = "";
         let useSearchTool = false;
-        
-        if (scrapedMarkdown && scrapedMarkdown.length > 200) {
+        const isGerman = language === 'DE';
+
+        if (scrapedMarkdown && scrapedMarkdown.length > 300) {
            // Scenario A: Scrape Successful (High Quality)
            prompt = `
-           ANALYZE THIS WEBSITE CONTENT (Source: Jina AI Bridge):
-           ---
-           ${scrapedMarkdown}
-           ---
-           TASK: Extract 4 specific marketing insights to build a brief.
-           
-           Required JSON Output:
-           { 
-             "productContext": "Detailed description of product/service", 
-             "targetAudience": "Specific avatar description", 
-             "goal": "Primary conversion goal", 
-             "speaker": "Brand tone of voice" 
-           }
-           Language: ${language === 'DE' ? 'German' : 'English'}`;
+You are a senior marketing analyst. Analyze this REAL website content and extract SPECIFIC, FACTUAL information.
+
+=== WEBSITE CONTENT (from ${url}) ===
+${scrapedMarkdown.substring(0, 40000)}
+=== END CONTENT ===
+
+CRITICAL RULES:
+1. Extract ONLY information that is ACTUALLY present in the content above
+2. Use SPECIFIC product names, features, prices, and details mentioned on the site
+3. If the website is an e-commerce store, list actual product categories
+4. If it's a service business, describe the actual services offered
+5. Quote actual taglines or value propositions from the site when possible
+6. DO NOT make up generic descriptions - be specific to THIS website
+7. If certain information is not available, write "Nicht aus der Website ersichtlich" (DE) or "Not visible from website" (EN)
+
+EXTRACT INTO THIS JSON FORMAT:
+{
+  "productContext": "${isGerman ? 'Beschreibe das konkrete Produkt/Service dieser Website. Nenne spezifische Features, Produktnamen, Preise falls vorhanden. Min. 2-3 Sätze mit echten Details von der Seite.' : 'Describe the specific product/service of this website. Name specific features, product names, prices if available. Min. 2-3 sentences with real details from the site.'}",
+  "targetAudience": "${isGerman ? 'Wer ist die Zielgruppe basierend auf der Sprache, dem Design und den Inhalten der Seite? Sei spezifisch (z.B. "Deutsche Unternehmer im E-Commerce Bereich" statt nur "Unternehmer")' : 'Who is the target audience based on the language, design and content of the site? Be specific.'}",
+  "goal": "${isGerman ? 'Was ist das Hauptziel der Website? (z.B. "Verkauf von X", "Lead-Generierung für Y", "Newsletter-Anmeldungen")' : 'What is the main goal of the website? (e.g. "Sell X", "Lead generation for Y", "Newsletter signups")'}",
+  "speaker": "${isGerman ? 'Beschreibe den Tonfall der Website: Professionell/Casual? Du/Sie? Technisch/Einfach? Zitiere einen beispielhaften Satz von der Seite.' : 'Describe the tone of voice: Professional/Casual? Formal/Informal? Technical/Simple? Quote an example sentence from the site.'}"
+}
+
+OUTPUT: Valid JSON only, no markdown formatting.
+LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         } else {
            // Scenario B: Scrape Failed/Timeout -> Google Search Tool (Fallback)
            useSearchTool = true;
            prompt = `
-           PERFORM A DEEP GOOGLE SEARCH FOR: "${url}"
-           
-           TASK: Create a professional marketing brief.
-           
-           STRICT RULES FOR FALLBACK:
-           1. If the website is offline or unknown, INFER the business model from the domain name, but prefix with "[Inferred]".
-           2. DO NOT INVENT fake products. If unsure, output general marketing best practices for that industry.
-           
-           Required JSON Output:
-           1. productContext: What is likely being sold?
-           2. targetAudience: Who is the customer?
-           3. goal: Likely conversion goal (Leads/Sales).
-           4. speaker: Professional brand voice.
-           
-           OUTPUT JSON ONLY.
-           Language: ${language === 'DE' ? 'German' : 'English'}`;
+You are a marketing research analyst. Research this website/brand: "${url}"
+
+TASK: Find REAL information about this business using Google Search.
+
+STRICT RULES:
+1. Search for the actual website and company information
+2. Find real product/service descriptions, not generic assumptions
+3. Look for reviews, social media presence, or press mentions
+4. If the business truly cannot be found, prefix all fields with "[Recherche erforderlich]" (DE) or "[Research needed]" (EN)
+5. DO NOT invent fake products or services
+
+OUTPUT THIS JSON:
+{
+  "productContext": "${isGerman ? 'Was verkauft/bietet dieses Unternehmen konkret an? Basierend auf Suchergebnissen.' : 'What does this company specifically sell/offer? Based on search results.'}",
+  "targetAudience": "${isGerman ? 'Wer ist die wahrscheinliche Zielgruppe?' : 'Who is the likely target audience?'}",
+  "goal": "${isGerman ? 'Hauptziel der Website (Verkauf, Leads, Awareness)' : 'Main website goal (Sales, Leads, Awareness)'}",
+  "speaker": "${isGerman ? 'Tonfall basierend auf gefundenen Inhalten' : 'Tone of voice based on found content'}"
+}
+
+OUTPUT: Valid JSON only.
+LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         }
 
-        const config: any = { 
-            responseMimeType: "application/json" 
+        const config: any = {
+            responseMimeType: "application/json",
+            temperature: 0.3 // Lower temperature for more factual extraction
         };
 
         if (useSearchTool) {
@@ -528,7 +557,7 @@ export const handler = async (event: any) => {
         }
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
+          model: 'gemini-2.0-flash',
           contents: prompt,
           config: config,
         });
@@ -536,19 +565,43 @@ export const handler = async (event: any) => {
         // Robust JSON Parsing
         let jsonData: any = {};
         const responseText = response.text || "";
-        
+
         try {
           jsonData = JSON.parse(responseText);
         } catch (e) {
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          // Try to extract JSON from markdown code blocks
+          const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) ||
+                           responseText.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
-             try { jsonData = JSON.parse(jsonMatch[0]); } catch(e2) {}
+             const jsonStr = jsonMatch[1] || jsonMatch[0];
+             try { jsonData = JSON.parse(jsonStr.trim()); } catch(e2) {
+               console.error("JSON parse failed:", jsonStr);
+             }
           }
         }
 
-        const sources = scrapedMarkdown 
-          ? [{ title: "Jina AI Direct Scan", uri: url }] 
-          : [{ title: "AI Search Retrieval", uri: url }];
+        // Validate that we got real content, not empty strings
+        const hasRealContent = (jsonData.productContext && jsonData.productContext.length > 20) ||
+                               (jsonData.targetAudience && jsonData.targetAudience.length > 10);
+
+        if (!hasRealContent && useSearchTool) {
+          // If search also failed, provide helpful fallback
+          const domain = url.replace(/https?:\/\//, '').split('/')[0];
+          jsonData = {
+            productContext: isGerman
+              ? `[Automatische Analyse von ${domain} nicht möglich] Bitte beschreibe dein Produkt/Service manuell.`
+              : `[Automatic analysis of ${domain} not possible] Please describe your product/service manually.`,
+            targetAudience: isGerman
+              ? "Bitte definiere deine Zielgruppe manuell."
+              : "Please define your target audience manually.",
+            goal: isGerman ? "Conversion/Verkauf" : "Conversion/Sales",
+            speaker: isGerman ? "Professionell und vertrauenswürdig" : "Professional and trustworthy"
+          };
+        }
+
+        const sources = scrapedMarkdown
+          ? [{ title: isGerman ? "Direkt-Scan der Website" : "Direct Website Scan", uri: url }]
+          : [{ title: isGerman ? "KI-Recherche" : "AI Research", uri: url }];
 
         if (useSearchTool && response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
              response.candidates[0].groundingMetadata.groundingChunks.forEach((chunk: any) => {
@@ -613,7 +666,7 @@ export const handler = async (event: any) => {
         `;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview', 
+          model: 'gemini-2.0-flash',
           contents: prompt,
           config: {
             systemInstruction: getSystemInstruction(brief.language, customTuning),
