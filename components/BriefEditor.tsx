@@ -106,14 +106,14 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
 
   const scores = brief.targetScores || DEFAULT_NEURO_SCORES;
 
-  const inputClasses = "w-full p-4 md:p-5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all text-sm md:text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 font-medium shadow-sm";
-  const labelClasses = "block text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.2em] mb-2 md:mb-3 px-1 antialiased";
+  const inputClasses = "w-full p-4 md:p-5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 font-medium shadow-sm";
+  const labelClasses = "block text-sm font-black text-zinc-600 dark:text-zinc-400 uppercase tracking-[0.15em] mb-2 md:mb-3 px-1 antialiased";
 
   const LabelWithHelp = ({ label, helpKey, htmlFor }: { label: string, helpKey: string, htmlFor?: string }) => (
     <div className="flex items-center gap-2 mb-2 md:mb-3">
       <label
         htmlFor={htmlFor}
-        className="text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.2em] px-1 antialiased cursor-default"
+        className="text-sm font-black text-zinc-600 dark:text-zinc-400 uppercase tracking-[0.15em] px-1 antialiased cursor-default"
       >
         {label}
       </label>
@@ -124,13 +124,14 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
           setActiveHelp(activeHelp === helpKey ? null : helpKey);
         }}
         aria-label={`Help for ${label}`}
-        className={`w-4 h-4 flex items-center justify-center rounded-full border transition-all ${
+        aria-expanded={activeHelp === helpKey}
+        className={`min-w-[28px] min-h-[28px] w-7 h-7 flex items-center justify-center rounded-full border transition-all ${
            activeHelp === helpKey
            ? 'border-purple-500 text-purple-500 bg-purple-500/10'
-           : 'border-zinc-300 dark:border-zinc-700 text-zinc-300 dark:text-zinc-600 hover:border-purple-400 hover:text-purple-400'
+           : 'border-zinc-300 dark:border-zinc-700 text-zinc-400 dark:text-zinc-500 hover:border-purple-400 hover:text-purple-400'
         }`}
       >
-        <span className="text-[9px] font-bold" aria-hidden="true">i</span>
+        <span className="text-xs font-bold" aria-hidden="true">?</span>
       </button>
     </div>
   );
@@ -424,10 +425,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                                           key={i}
                                           onClick={() => toggleTriggerWord(word)}
                                           disabled={disabled}
-                                          className={`px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider border transition-all ${
-                                            isSelected 
+                                          className={`min-h-[44px] px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all ${
+                                            isSelected
                                              ? 'bg-purple-600 border-purple-600 text-white shadow-md'
-                                             : 'bg-white dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 text-zinc-500 hover:border-zinc-400 dark:hover:border-zinc-600'
+                                             : 'bg-white dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400 hover:border-purple-400 dark:hover:border-purple-500'
                                           }`}
                                         >
                                           {word}
@@ -439,10 +440,10 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                                           key={`custom-${i}`}
                                           onClick={() => toggleTriggerWord(word)}
                                           disabled={disabled}
-                                          className="px-3 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider border transition-all bg-purple-600 border-purple-600 text-white shadow-md flex items-center gap-1"
+                                          className="min-h-[44px] px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider border transition-all bg-purple-600 border-purple-600 text-white shadow-md flex items-center gap-2"
                                         >
                                           {word}
-                                          <span className="opacity-50 hover:opacity-100">&times;</span>
+                                          <span className="opacity-60 hover:opacity-100 text-base">&times;</span>
                                         </button>
                                     ))}
                                  </div>
@@ -468,9 +469,9 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
                                        onClick={addCustomTrigger}
                                        disabled={!customTrigger.trim() || disabled}
                                        aria-label="Add custom trigger word"
-                                       className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-md text-zinc-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-all disabled:opacity-30"
+                                       className="absolute right-2 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] p-2.5 rounded-lg text-zinc-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-all disabled:opacity-30 flex items-center justify-center"
                                      >
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                                      </button>
                                   </div>
                                </div>
@@ -483,23 +484,24 @@ export const BriefEditor: React.FC<BriefEditorProps> = ({ brief, onChange, disab
 
             <div className="pt-8 md:pt-10 border-t border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center justify-between mb-8 md:mb-10">
-                <h3 className="text-xs font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-[0.2em] antialiased flex items-center gap-3">
-                   <span className="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                <h3 className="text-sm font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.15em] antialiased flex items-center gap-3">
+                   <span className="w-2 h-2 rounded-full bg-purple-500"></span>
                    Neuro-Metric Control
                 </h3>
-                <button 
+                <button
                   onClick={() => setShowNeuroInfo(!showNeuroInfo)}
-                  className="group flex items-center gap-2.5 px-4 py-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-purple-500/50 transition-all shadow-sm active:scale-95"
+                  className="group flex items-center gap-2.5 min-h-[44px] px-4 py-2.5 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-purple-500/50 transition-all shadow-sm active:scale-95"
                   aria-label="Erklärung anzeigen"
+                  aria-expanded={showNeuroInfo}
                 >
-                  <span className="text-[10px] font-black text-zinc-400 group-hover:text-purple-500 uppercase tracking-[0.2em] transition-colors">
+                  <span className="text-xs font-black text-zinc-500 group-hover:text-purple-500 uppercase tracking-widest transition-colors">
                     {t.neuroHelp.helpBtn}
                   </span>
                   <div className="text-zinc-400 group-hover:text-purple-500 transition-colors flex items-center">
                     {showNeuroInfo ? (
-                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="18 15 12 9 6 15"/></svg>
+                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="18 15 12 9 6 15"/></svg>
                     ) : (
-                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                     )}
                   </div>
                 </button>

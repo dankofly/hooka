@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, lazy, Suspense } from 'react';
 import { MarketingBrief, ViralConcept, GenerationStatus, HistoryItem, BriefProfile, UserProfile, Language, UserQuota } from './types.ts';
 import { generateViralHooks } from './services/gemini.ts';
 import { db } from './services/db.ts';
@@ -9,42 +9,52 @@ import { BriefEditor } from './components/BriefEditor.tsx';
 import { ConceptCard } from './components/ConceptCard.tsx';
 import { HistoryList } from './components/HistoryList.tsx';
 import { ProfileManager } from './components/ProfileManager.tsx';
-import { ImpressumModal } from './components/ImpressumModal.tsx';
-import { PrivacyPolicyModal } from './components/PrivacyPolicyModal.tsx';
 import { ConsentBanner } from './components/ConsentBanner.tsx';
-import { ProfileEditModal } from './components/ProfileEditModal.tsx';
-import { AdminModal } from './components/AdminModal.tsx';
-import { UpgradeModal } from './components/UpgradeModal.tsx';
 import { QuotaCounter } from './components/QuotaCounter.tsx';
-import { PricingPage } from './components/PricingPage.tsx';
-import { WhyHookaPage } from './components/WhyHookaPage.tsx';
 import { TRANSLATIONS } from './text.ts';
+
+// Lazy load modals for better initial bundle size
+const ImpressumModal = lazy(() => import('./components/ImpressumModal.tsx').then(m => ({ default: m.ImpressumModal })));
+const PrivacyPolicyModal = lazy(() => import('./components/PrivacyPolicyModal.tsx').then(m => ({ default: m.PrivacyPolicyModal })));
+const ProfileEditModal = lazy(() => import('./components/ProfileEditModal.tsx').then(m => ({ default: m.ProfileEditModal })));
+const AdminModal = lazy(() => import('./components/AdminModal.tsx').then(m => ({ default: m.AdminModal })));
+const UpgradeModal = lazy(() => import('./components/UpgradeModal.tsx').then(m => ({ default: m.UpgradeModal })));
+const PricingPage = lazy(() => import('./components/PricingPage.tsx').then(m => ({ default: m.PricingPage })));
+const WhyHookaPage = lazy(() => import('./components/WhyHookaPage.tsx').then(m => ({ default: m.WhyHookaPage })));
+
+// Modal loading fallback
+const ModalFallback = () => (
+  <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+  </div>
+);
 
 const STORAGE_KEY_THEME = 'hypeakz_theme';
 const STORAGE_KEY_USER = 'hypeakz_user_profile';
 const STORAGE_KEY_APP_LANG = 'hypeakz_app_lang';
 
 const Logo = ({ text }: { text: string }) => (
-  <div className="flex items-center gap-[10px] md:gap-[14px] select-none group">
+  <div className="flex items-center gap-3 md:gap-4 select-none group" role="banner">
     <div className="relative flex items-center justify-center">
-      <svg 
-        width="16" 
-        height="16" 
-        viewBox="0 0 24 24" 
-        fill="none" 
-        xmlns="http://www.w3.org/2000/svg" 
-        className="text-zinc-500 dark:text-[#D1D1D1] transition-transform duration-500 group-hover:scale-105"
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        className="text-zinc-700 dark:text-zinc-300 transition-transform duration-500 group-hover:scale-105 motion-reduce:transition-none"
+        aria-hidden="true"
       >
-        <path 
-          d="M4 8.5L20 8.5L12 17.5L4 8.5Z" 
-          fill="currentColor" 
-          stroke="currentColor" 
-          strokeWidth="2.5" 
-          strokeLinejoin="round" 
+        <path
+          d="M4 8.5L20 8.5L12 17.5L4 8.5Z"
+          fill="currentColor"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinejoin="round"
         />
       </svg>
     </div>
-    <span className="text-[14px] md:text-[17px] font-bold tracking-[0.2em] md:tracking-[0.32em] text-zinc-900 dark:text-[#F0F0F0] uppercase antialiased leading-none">
+    <span className="text-base md:text-lg font-bold tracking-[0.2em] md:tracking-[0.3em] text-zinc-900 dark:text-white uppercase antialiased leading-none">
       {text}
     </span>
   </div>
@@ -62,7 +72,8 @@ const App: React.FC = () => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   // UI Language state
   const [appLanguage, setAppLanguage] = useState<Language>('DE');
 
@@ -205,10 +216,10 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
 
-  const handleAppLanguageChange = (lang: Language) => {
+  const handleAppLanguageChange = useCallback((lang: Language) => {
     setAppLanguage(lang);
     localStorage.setItem(STORAGE_KEY_APP_LANG, lang);
-  };
+  }, []);
 
   const handleBriefChange = useCallback((key: keyof MarketingBrief, value: any) => {
     setBrief(prev => ({ ...prev, [key]: value }));
@@ -269,13 +280,13 @@ const App: React.FC = () => {
     await db.saveUser(updatedUser);
   };
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     authService.logout();
     setUser(null);
     localStorage.removeItem(STORAGE_KEY_USER);
     // Reload quota for anonymous state
     db.getQuota().then(q => setQuota(q));
-  };
+  }, []);
 
   const handleGenerate = async () => {
     // Check quota before generation
@@ -320,16 +331,22 @@ const App: React.FC = () => {
     }
   };
 
-  const toggleTheme = () => {
-    const next = !isDark;
-    setIsDark(next);
-    localStorage.setItem(STORAGE_KEY_THEME, next ? 'dark' : 'light');
-    if (next) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  };
+  const toggleTheme = useCallback(() => {
+    setIsDark(prev => {
+      const next = !prev;
+      localStorage.setItem(STORAGE_KEY_THEME, next ? 'dark' : 'light');
+      if (next) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+      return next;
+    });
+  }, []);
+
+  const closeMobileMenu = useCallback(() => {
+    setIsMobileMenuOpen(false);
+  }, []);
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black relative selection:bg-purple-500/30 font-sans transition-colors duration-1000 pb-20">
@@ -341,36 +358,36 @@ const App: React.FC = () => {
         <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-blue-600/5 rounded-full blur-[100px] animate-pulse-fast opacity-30"></div>
       </div>
 
-      <nav className="sticky top-0 z-[60] glass bg-white/90 dark:bg-black/90 border-b border-zinc-200 dark:border-zinc-800 px-4 md:px-8 py-4 md:py-5 backdrop-blur-xl">
+      <nav className="sticky top-0 z-[60] glass bg-white/90 dark:bg-black/90 border-b border-zinc-200 dark:border-zinc-800 px-4 md:px-8 py-3 md:py-5 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <Logo text={t.nav.logoText} />
-          <div className="flex items-center gap-3 md:gap-6">
+          <div className="flex items-center gap-2 md:gap-6">
 
-            {/* Why Hooka Link */}
+            {/* Desktop Navigation Links */}
             <button
               onClick={() => setIsWhyHookaOpen(true)}
-              className="hidden md:block text-[10px] font-black text-zinc-500 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors"
+              className="hidden md:block text-xs font-black text-zinc-600 dark:text-zinc-400 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors px-3 py-2"
             >
               {t.whyHooka.navTitle}
             </button>
 
-            {/* Pricing Link */}
             <button
               onClick={() => setIsPricingOpen(true)}
-              className="hidden md:block text-[10px] font-black text-zinc-500 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors"
+              className="hidden md:block text-xs font-black text-zinc-600 dark:text-zinc-400 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors px-3 py-2"
             >
               {t.pricing.navTitle}
             </button>
 
+            {/* Language Switcher - improved touch targets */}
             <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-lg p-1 border border-zinc-200 dark:border-zinc-800">
               {(['DE', 'EN'] as Language[]).map((lang) => (
                 <button
                   key={lang}
                   onClick={() => handleAppLanguageChange(lang)}
-                  className={`px-2 py-1 text-[10px] font-black uppercase tracking-widest rounded-md transition-all ${
+                  className={`min-w-[44px] min-h-[36px] px-3 py-2 text-xs font-black uppercase tracking-widest rounded-md transition-all ${
                     appLanguage === lang
                       ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white shadow-sm'
-                      : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300'
+                      : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                   }`}
                 >
                   {lang}
@@ -380,24 +397,41 @@ const App: React.FC = () => {
 
             <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-800 hidden md:block"></div>
 
+            {/* Theme Toggle - improved touch target */}
             <button
               onClick={toggleTheme}
               aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
               title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              className="p-2 md:p-2.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-all"
+              className="min-w-[44px] min-h-[44px] p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-all flex items-center justify-center"
             >
               {isDark ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2" fill="none" stroke="currentColor" strokeWidth="2"/></svg> : <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
             </button>
+
+            {/* Mobile Menu Button */}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              aria-label={isMobileMenuOpen ? "Close menu" : "Open menu"}
+              aria-expanded={isMobileMenuOpen}
+              className="md:hidden min-w-[44px] min-h-[44px] p-3 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-400 transition-all flex items-center justify-center"
+            >
+              {isMobileMenuOpen ? (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              ) : (
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+              )}
+            </button>
+
+            {/* Desktop User Section */}
             {user ? (
-              <div className="flex items-center gap-3 md:gap-5 pl-3 md:pl-6 border-l border-zinc-200 dark:border-zinc-800 animate-in fade-in slide-in-from-right-4">
-                <div className="hidden md:flex flex-col items-end">
-                  <span className="text-xs font-black text-zinc-900 dark:text-white uppercase tracking-widest">{user.name}</span>
+              <div className="hidden md:flex items-center gap-5 pl-6 border-l border-zinc-200 dark:border-zinc-800 animate-in fade-in slide-in-from-right-4">
+                <div className="flex flex-col items-end">
+                  <span className="text-sm font-black text-zinc-900 dark:text-white uppercase tracking-widest">{user.name}</span>
                   <div className="flex gap-3">
-                    <button onClick={() => setIsProfileModalOpen(true)} className="text-[10px] font-bold text-zinc-400 hover:text-purple-500 uppercase tracking-widest transition-colors">{t.nav.editProfile}</button>
-                    <button onClick={handleLogout} className="text-[10px] font-bold text-red-500/60 hover:text-red-500 uppercase tracking-widest transition-colors">{t.nav.logout}</button>
+                    <button onClick={() => setIsProfileModalOpen(true)} className="text-xs font-bold text-zinc-500 hover:text-purple-500 uppercase tracking-widest transition-colors py-1">{t.nav.editProfile}</button>
+                    <button onClick={handleLogout} className="text-xs font-bold text-red-500/60 hover:text-red-500 uppercase tracking-widest transition-colors py-1">{t.nav.logout}</button>
                   </div>
                 </div>
-                <button onClick={() => setIsProfileModalOpen(true)} className="w-9 h-9 md:w-10 md:h-10 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-zinc-900 dark:text-white text-xs md:text-sm font-black haptic-btn transition-all hover:rotate-3 shadow-md">
+                <button onClick={() => setIsProfileModalOpen(true)} className="min-w-[44px] min-h-[44px] w-11 h-11 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-zinc-900 dark:text-white text-sm font-black haptic-btn transition-all hover:rotate-3 shadow-md">
                   {user.name.charAt(0)}
                 </button>
               </div>
@@ -405,7 +439,7 @@ const App: React.FC = () => {
               <button
                 onClick={handleLogin}
                 disabled={isAuthenticating}
-                className={`px-4 py-2 md:px-6 md:py-2.5 rounded-lg text-[10px] md:text-xs font-black uppercase tracking-widest haptic-btn shadow-xl transition-all hover:scale-105 active:scale-95 ${
+                className={`hidden md:block min-h-[44px] px-6 py-3 rounded-lg text-xs font-black uppercase tracking-widest haptic-btn shadow-xl transition-all hover:scale-105 active:scale-95 ${
                   isAuthenticating
                     ? 'bg-zinc-400 dark:bg-zinc-600 text-white cursor-wait'
                     : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900'
@@ -416,9 +450,75 @@ const App: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Mobile Menu Drawer */}
+        {isMobileMenuOpen && (
+          <div className="md:hidden absolute top-full left-0 right-0 bg-white dark:bg-zinc-950 border-b border-zinc-200 dark:border-zinc-800 shadow-xl animate-in slide-in-from-top-2 duration-200">
+            <div className="max-w-7xl mx-auto px-4 py-4 space-y-2">
+              {/* Mobile Nav Links */}
+              <button
+                onClick={() => { setIsWhyHookaOpen(true); closeMobileMenu(); }}
+                className="w-full min-h-[48px] px-4 py-3 text-left text-sm font-black text-zinc-700 dark:text-zinc-300 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 rounded-lg uppercase tracking-widest transition-colors"
+              >
+                {t.whyHooka.navTitle}
+              </button>
+              <button
+                onClick={() => { setIsPricingOpen(true); closeMobileMenu(); }}
+                className="w-full min-h-[48px] px-4 py-3 text-left text-sm font-black text-zinc-700 dark:text-zinc-300 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 rounded-lg uppercase tracking-widest transition-colors"
+              >
+                {t.pricing.navTitle}
+              </button>
+
+              <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-2" />
+
+              {/* Mobile User Section */}
+              {user ? (
+                <>
+                  <div className="px-4 py-2">
+                    <span className="text-sm font-black text-zinc-900 dark:text-white uppercase tracking-widest">{user.name}</span>
+                    <span className="text-xs text-zinc-500 block mt-1">{user.email}</span>
+                  </div>
+                  <button
+                    onClick={() => { setIsProfileModalOpen(true); closeMobileMenu(); }}
+                    className="w-full min-h-[48px] px-4 py-3 text-left text-sm font-bold text-zinc-600 dark:text-zinc-400 hover:text-purple-500 hover:bg-zinc-50 dark:hover:bg-zinc-900 rounded-lg uppercase tracking-widest transition-colors"
+                  >
+                    {t.nav.editProfile}
+                  </button>
+                  <button
+                    onClick={() => { handleLogout(); closeMobileMenu(); }}
+                    className="w-full min-h-[48px] px-4 py-3 text-left text-sm font-bold text-red-500/80 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg uppercase tracking-widest transition-colors"
+                  >
+                    {t.nav.logout}
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => { handleLogin(); closeMobileMenu(); }}
+                  disabled={isAuthenticating}
+                  className={`w-full min-h-[48px] px-4 py-3 rounded-lg text-sm font-black uppercase tracking-widest transition-all ${
+                    isAuthenticating
+                      ? 'bg-zinc-400 dark:bg-zinc-600 text-white cursor-wait'
+                      : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900'
+                  }`}
+                >
+                  {isAuthenticating ? t.auth.synchronizing : t.nav.vaultAccess}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 md:px-6 py-10 md:py-16 space-y-12 md:space-y-20 relative z-10">
+      {/* Mobile Menu Backdrop */}
+      {isMobileMenuOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-[59] bg-black/20 backdrop-blur-sm"
+          onClick={closeMobileMenu}
+          aria-hidden="true"
+        />
+      )}
+
+      <main id="main-content" className="max-w-7xl mx-auto px-4 md:px-8 py-10 md:py-16 space-y-12 md:space-y-20 relative z-10" role="main">
         <div className="text-center space-y-6 md:space-y-8 py-4 md:py-8 animate-in fade-in slide-in-from-bottom-12 duration-1000">
           <div className="inline-block px-4 py-1.5 md:px-5 md:py-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
             <span className="text-[9px] md:text-[10px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.3em] md:tracking-[0.35em] antialiased">{t.hero.badge}</span>
@@ -543,56 +643,71 @@ const App: React.FC = () => {
         }} activeId={activeHistoryId} />
       </main>
 
-      {isProfileModalOpen && user && (
-        <ProfileEditModal user={user} t={t} onClose={() => setIsProfileModalOpen(false)} onSave={handleUpdateProfile} />
-      )}
-
       <footer className="max-w-7xl mx-auto px-6 py-12 md:py-24 border-t border-zinc-200 dark:border-zinc-800 flex flex-col md:flex-row justify-between items-center gap-6 md:gap-10">
-        <p className="text-[9px] md:text-[10px] font-black text-zinc-400 dark:text-zinc-600 uppercase tracking-[0.3em] antialiased text-center md:text-left">{t.company.copyright}</p>
-        <div className="flex gap-8 md:gap-12">
-          <button onClick={() => setIsImpressumOpen(true)} className="text-[9px] md:text-[10px] font-black text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-[0.2em] antialiased">{t.nav.impressum}</button>
-          <button onClick={() => setIsPrivacyOpen(true)} className="text-[9px] md:text-[10px] font-black text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-[0.2em] antialiased">{t.nav.privacy}</button>
+        <p className="text-xs font-black text-zinc-500 dark:text-zinc-500 uppercase tracking-[0.2em] antialiased text-center md:text-left">{t.company.copyright}</p>
+        <div className="flex gap-4 md:gap-8">
+          <button onClick={() => setIsImpressumOpen(true)} className="min-h-[44px] px-3 py-2 text-xs font-black text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest antialiased">{t.nav.impressum}</button>
+          <button onClick={() => setIsPrivacyOpen(true)} className="min-h-[44px] px-3 py-2 text-xs font-black text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors uppercase tracking-widest antialiased">{t.nav.privacy}</button>
           {/* Admin Button */}
           <button
             onClick={() => setIsAdminOpen(true)}
             aria-label="Admin panel"
-            className="text-zinc-300 dark:text-zinc-800 hover:text-purple-500 transition-colors"
+            className="min-w-[44px] min-h-[44px] p-3 flex items-center justify-center text-zinc-400 dark:text-zinc-700 hover:text-purple-500 transition-colors rounded-lg"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           </button>
         </div>
       </footer>
-      <ImpressumModal isOpen={isImpressumOpen} t={t} onClose={() => setIsImpressumOpen(false)} />
-      <PrivacyPolicyModal isOpen={isPrivacyOpen} t={t} onClose={() => setIsPrivacyOpen(false)} />
-      <AdminModal isOpen={isAdminOpen} t={t} onClose={() => setIsAdminOpen(false)} />
-      <UpgradeModal
-        isOpen={isUpgradeModalOpen}
-        onClose={() => setIsUpgradeModalOpen(false)}
-        t={t}
-        usedGenerations={quota.usedGenerations}
-        limit={quota.limit}
-        user={user}
-        onLoginRequired={() => {
-          setIsUpgradeModalOpen(false);
-          handleLogin();
-        }}
-      />
-      <PricingPage
-        isOpen={isPricingOpen}
-        onClose={() => setIsPricingOpen(false)}
-        t={t}
-        user={user}
-        quota={quota}
-        onLoginRequired={() => {
-          setIsPricingOpen(false);
-          handleLogin();
-        }}
-      />
-      <WhyHookaPage
-        isOpen={isWhyHookaOpen}
-        onClose={() => setIsWhyHookaOpen(false)}
-        t={t}
-      />
+
+      {/* Lazy-loaded Modals with Suspense */}
+      <Suspense fallback={<ModalFallback />}>
+        {isProfileModalOpen && user && (
+          <ProfileEditModal user={user} t={t} onClose={() => setIsProfileModalOpen(false)} onSave={handleUpdateProfile} />
+        )}
+        {isImpressumOpen && (
+          <ImpressumModal isOpen={isImpressumOpen} t={t} onClose={() => setIsImpressumOpen(false)} />
+        )}
+        {isPrivacyOpen && (
+          <PrivacyPolicyModal isOpen={isPrivacyOpen} t={t} onClose={() => setIsPrivacyOpen(false)} />
+        )}
+        {isAdminOpen && (
+          <AdminModal isOpen={isAdminOpen} t={t} onClose={() => setIsAdminOpen(false)} />
+        )}
+        {isUpgradeModalOpen && (
+          <UpgradeModal
+            isOpen={isUpgradeModalOpen}
+            onClose={() => setIsUpgradeModalOpen(false)}
+            t={t}
+            usedGenerations={quota.usedGenerations}
+            limit={quota.limit}
+            user={user}
+            onLoginRequired={() => {
+              setIsUpgradeModalOpen(false);
+              handleLogin();
+            }}
+          />
+        )}
+        {isPricingOpen && (
+          <PricingPage
+            isOpen={isPricingOpen}
+            onClose={() => setIsPricingOpen(false)}
+            t={t}
+            user={user}
+            quota={quota}
+            onLoginRequired={() => {
+              setIsPricingOpen(false);
+              handleLogin();
+            }}
+          />
+        )}
+        {isWhyHookaOpen && (
+          <WhyHookaPage
+            isOpen={isWhyHookaOpen}
+            onClose={() => setIsWhyHookaOpen(false)}
+            t={t}
+          />
+        )}
+      </Suspense>
     </div>
   );
 };
