@@ -3,6 +3,13 @@ command = "npm run build"
 functions = "netlify/functions"
 publish = "dist"
 
+# Allow Netlify Identity OAuth callbacks to pass through
+[[redirects]]
+from = "/.netlify/*"
+to = "/.netlify/:splat"
+status = 200
+
+# SPA fallback for all other routes
 [[redirects]]
 from = "/*"
 to = "/index.html"
