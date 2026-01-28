@@ -67,6 +67,51 @@ export const WhyHookaPage: React.FC<WhyHookaPageProps> = ({
             </p>
           </div>
 
+          {/* What are Hooks Intro Section */}
+          <div className="mb-16">
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+              <h3 className="text-xs font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.3em]">
+                {whyHooka.hooksIntroTitle}
+              </h3>
+              <div className="h-px flex-grow bg-zinc-200 dark:bg-zinc-800"></div>
+            </div>
+            <div className="p-8 bg-gradient-to-br from-yellow-500/5 to-orange-500/5 border border-yellow-500/20 rounded-2xl mb-8">
+              <p className="text-zinc-700 dark:text-zinc-300 leading-relaxed text-lg mb-4">
+                {whyHooka.hooksIntroText}
+              </p>
+              <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed font-medium">
+                {whyHooka.hooksIntroText2}
+              </p>
+            </div>
+
+            {/* Where You Need Hooks Grid */}
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-1.5 h-1.5 rounded-full bg-orange-500"></div>
+              <h4 className="text-[10px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.25em]">
+                {whyHooka.hooksWhereTitle}
+              </h4>
+            </div>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[
+                { title: whyHooka.hooksWhere1Title, desc: whyHooka.hooksWhere1Desc, icon: "📱" },
+                { title: whyHooka.hooksWhere2Title, desc: whyHooka.hooksWhere2Desc, icon: "💰" },
+                { title: whyHooka.hooksWhere3Title, desc: whyHooka.hooksWhere3Desc, icon: "🎙️" },
+                { title: whyHooka.hooksWhere4Title, desc: whyHooka.hooksWhere4Desc, icon: "📧" },
+                { title: whyHooka.hooksWhere5Title, desc: whyHooka.hooksWhere5Desc, icon: "🎯" },
+                { title: whyHooka.hooksWhere6Title, desc: whyHooka.hooksWhere6Desc, icon: "🎤" },
+              ].map((item, i) => (
+                <div key={i} className="p-5 bg-zinc-50 dark:bg-zinc-900/50 rounded-xl border border-zinc-200 dark:border-zinc-800 hover:border-orange-500/30 transition-all">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-xl">{item.icon}</span>
+                    <h5 className="font-black text-zinc-900 dark:text-white text-sm uppercase tracking-wide">{item.title}</h5>
+                  </div>
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Problem Section */}
           <div className="mb-16">
             <div className="flex items-center gap-4 mb-8">
