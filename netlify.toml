@@ -11,7 +11,6 @@ for = "/*"
   X-XSS-Protection = "1; mode=block"
   X-Content-Type-Options = "nosniff"
   Referrer-Policy = "strict-origin-when-cross-origin"
-  Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://identity.netlify.com https://*.netlify.app https://www.googletagmanager.com https://js.stripe.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: blob:; connect-src 'self' https://*.netlify.app https://*.netlify.com https://api.stripe.com https://generativelanguage.googleapis.com https://r.jina.ai; frame-src 'self' https://js.stripe.com https://hooks.stripe.com;"
 
 # Allow Netlify Identity OAuth callbacks to pass through
 [[redirects]]
