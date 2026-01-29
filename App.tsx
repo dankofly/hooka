@@ -587,34 +587,86 @@ const App: React.FC = () => {
           </div>
           <BriefEditor brief={brief} onChange={handleBriefChange} onAutoFill={(d) => setBrief(prev => ({...prev, ...d}))} disabled={status === GenerationStatus.LOADING} t={t} />
           <div className="flex flex-col items-center gap-4 py-2 md:py-6">
-            {/* Quota Display - Enhanced Counter */}
-            <QuotaCounter
-              quota={quota}
-              t={t}
-              onUpgradeClick={() => setIsPricingOpen(true)}
-              variant="default"
-            />
-
             <button
               onClick={handleGenerate}
-              disabled={status === GenerationStatus.LOADING}
-              className={`group relative overflow-hidden w-full md:w-auto px-8 py-5 md:px-20 md:py-8 rounded-xl md:rounded-2xl font-black text-xs uppercase tracking-[0.3em] md:tracking-[0.4em] transition-all duration-700 antialiased ${
-                status === GenerationStatus.LOADING ? 'bg-zinc-100 dark:bg-zinc-900 text-zinc-400 cursor-wait' : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 shadow-[0_20px_80px_-20px_rgba(0,0,0,0.3)] dark:shadow-[0_20px_80px_-20px_rgba(255,255,255,0.1)] hover:scale-[1.02] active:scale-[0.98]'
+              disabled={status === GenerationStatus.LOADING || (!quota.isPremium && quota.usedGenerations >= quota.limit)}
+              className={`group relative overflow-hidden w-full md:w-auto rounded-xl md:rounded-2xl font-black transition-all duration-700 antialiased ${
+                status === GenerationStatus.LOADING
+                  ? 'bg-zinc-100 dark:bg-zinc-900 text-zinc-400 cursor-wait'
+                  : (!quota.isPremium && quota.usedGenerations >= quota.limit)
+                    ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-400 cursor-not-allowed'
+                    : 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-950 shadow-[0_20px_80px_-20px_rgba(0,0,0,0.3)] dark:shadow-[0_20px_80px_-20px_rgba(255,255,255,0.1)] hover:scale-[1.02] active:scale-[0.98]'
               }`}
             >
-              <div className="relative z-10 flex items-center justify-center">
-                {status === GenerationStatus.LOADING ? (
-                  <div className="flex items-center gap-4">
-                    <div className="w-5 h-5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin"></div>
-                    <span>{t.briefing.generateButton.loading}</span>
+              <div className="relative z-10 flex items-center">
+                {/* Quota Circle - Left Side */}
+                {!quota.isPremium && status !== GenerationStatus.LOADING && (
+                  <div className="flex items-center gap-3 pl-4 pr-2 py-3 md:pl-5 md:pr-3 md:py-4 border-r border-white/20 dark:border-zinc-800/50">
+                    <div className="relative w-10 h-10 md:w-12 md:h-12">
+                      <svg className="w-10 h-10 md:w-12 md:h-12 transform -rotate-90" viewBox="0 0 48 48">
+                        <circle cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="3" className="text-white/20 dark:text-zinc-700" />
+                        <circle
+                          cx="24" cy="24" r="20" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"
+                          strokeDasharray={`${((quota.limit - quota.usedGenerations) / quota.limit) * 125.6} 125.6`}
+                          className={`transition-all duration-500 ${
+                            quota.usedGenerations >= quota.limit ? 'text-red-400' : quota.limit - quota.usedGenerations <= 3 ? 'text-orange-400' : 'text-purple-400'
+                          }`}
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-sm md:text-base font-black">{quota.limit - quota.usedGenerations}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-start">
+                      <span className="text-[9px] md:text-[10px] font-black uppercase tracking-wider opacity-90">
+                        {t.quota.remaining}
+                      </span>
+                      <span className="text-[8px] md:text-[9px] opacity-60">
+                        {quota.usedGenerations}/{quota.limit}
+                      </span>
+                    </div>
                   </div>
-                ) : t.briefing.generateButton.idle}
+                )}
+
+                {/* Premium Badge - Left Side */}
+                {quota.isPremium && status !== GenerationStatus.LOADING && (
+                  <div className="flex items-center gap-2 pl-4 pr-2 py-4 md:pl-5 md:pr-3 md:py-5 border-r border-white/20 dark:border-zinc-800/50">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-purple-400">
+                      <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"/>
+                    </svg>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-purple-400">Premium</span>
+                  </div>
+                )}
+
+                {/* Button Text - Right Side */}
+                <div className="px-6 py-4 md:px-10 md:py-5 flex items-center justify-center">
+                  {status === GenerationStatus.LOADING ? (
+                    <div className="flex items-center gap-3">
+                      <div className="w-4 h-4 md:w-5 md:h-5 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin"></div>
+                      <span className="text-[10px] md:text-xs uppercase tracking-[0.2em] md:tracking-[0.3em]">{t.briefing.generateButton.loading}</span>
+                    </div>
+                  ) : (
+                    <span className="text-[10px] md:text-xs uppercase tracking-[0.2em] md:tracking-[0.3em]">
+                      {(!quota.isPremium && quota.usedGenerations >= quota.limit) ? t.quota.limitReached : t.briefing.generateButton.idle}
+                    </span>
+                  )}
+                </div>
               </div>
 
-              {status !== GenerationStatus.LOADING && (
+              {status !== GenerationStatus.LOADING && !(!quota.isPremium && quota.usedGenerations >= quota.limit) && (
                 <div className="absolute -inset-1 bg-gradient-to-r from-purple-600 via-blue-500 to-purple-600 rounded-2xl blur-xl opacity-0 group-hover:opacity-10 transition duration-1000"></div>
               )}
             </button>
+
+            {/* Upgrade hint when quota is empty */}
+            {!quota.isPremium && quota.usedGenerations >= quota.limit && (
+              <button
+                onClick={() => setIsPricingOpen(true)}
+                className="text-[10px] font-bold text-purple-600 dark:text-purple-400 hover:underline uppercase tracking-wider"
+              >
+                {t.quota.upgradeCta}
+              </button>
+            )}
           </div>
         </div>
 
