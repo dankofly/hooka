@@ -16,7 +16,7 @@ export const TRANSLATIONS = {
   EN: {
     ...COMMON,
     nav: {
-      logoText: "HYPEAKZ.IO",
+      logoText: "HOOKA",
       editProfile: "Edit Profile",
       logout: "Logout",
       vaultAccess: "Vault Access",
@@ -50,7 +50,17 @@ export const TRANSLATIONS = {
         placeholder: "Enter brand URL to auto-brief...",
         buttonIdle: "Scan Brand",
         buttonActive: "Extracting...",
-        sourcesTitle: "Neural Sources"
+        sourcesTitle: "Neural Sources",
+        invalidUrl: "Please enter a valid URL (e.g. 'hypeakz.io' or 'google.com')."
+      },
+      channel: {
+        label: "Output Channel",
+        options: {
+          VIDEO: "Video (TikTok/Reels)",
+          EMAIL_SUBJECT: "Email Subject",
+          NEWSLETTER: "Newsletter Opener",
+          FACEBOOK: "Facebook Post"
+        }
       },
       fields: {
         context: { 
@@ -178,13 +188,36 @@ export const TRANSLATIONS = {
     results: {
       headline: "Neuro Concepts",
       copySuccess: "Copied!",
+      saveToLibrary: "Save to library",
+      savedToLibrary: "Saved",
       labels: {
         hook: "The Viral Hook",
-        script: "Video Script",
+        script: "Script",
+        visual: "Visual / B-Variant",
         pattern: "Pattern-Interrupt",
         intensity: "Intensity",
         gap: "Zeigarnik Gap",
         fomo: "FOMO Pressure"
+      }
+    },
+    library: {
+      navTitle: "Library",
+      title: "Hook Library",
+      subtitle: "Your tested hooks with real results. Top performers automatically feed back into new generations.",
+      empty: "No saved hooks yet. Generate concepts and save the ones you actually use.",
+      resultLabel: "Result",
+      metricLabel: "Metric",
+      valuePlaceholder: "e.g. 42.5",
+      saveResult: "Save result",
+      resultSaved: "Saved",
+      deleteButton: "Delete",
+      close: "Close",
+      metrics: {
+        open_rate: "Open rate %",
+        ctr: "CTR %",
+        views: "Views",
+        engagement: "Engagement %",
+        other: "Other"
       }
     },
     history: {
@@ -382,7 +415,7 @@ export const TRANSLATIONS = {
   DE: {
     ...COMMON,
     nav: {
-      logoText: "HYPEAKZ.IO",
+      logoText: "HOOKA",
       editProfile: "Profil",
       logout: "Abmelden",
       vaultAccess: "Vault Login",
@@ -416,7 +449,17 @@ export const TRANSLATIONS = {
         placeholder: "Marken-URL eingeben (z.B. hypeakz.io)...",
         buttonIdle: "Analysieren",
         buttonActive: "Analysiere...",
-        sourcesTitle: "Gefundene Quellen"
+        sourcesTitle: "Gefundene Quellen",
+        invalidUrl: "Bitte gib eine gültige URL ein (z.B. 'hypeakz.io' oder 'google.com')."
+      },
+      channel: {
+        label: "Ausgabe-Kanal",
+        options: {
+          VIDEO: "Video (TikTok/Reels)",
+          EMAIL_SUBJECT: "E-Mail-Betreff",
+          NEWSLETTER: "Newsletter-Opener",
+          FACEBOOK: "Facebook-Post"
+        }
       },
       fields: {
         context: { 
@@ -544,13 +587,36 @@ export const TRANSLATIONS = {
     results: {
       headline: "Neuro Concepts",
       copySuccess: "Kopiert!",
+      saveToLibrary: "In Library speichern",
+      savedToLibrary: "Gespeichert",
       labels: {
         hook: "Der Viral Hook",
-        script: "Video Skript",
+        script: "Skript",
+        visual: "Visual / B-Variante",
         pattern: "Pattern-Interrupt",
         intensity: "Intensität",
         gap: "Zeigarnik Gap",
         fomo: "FOMO Druck"
+      }
+    },
+    library: {
+      navTitle: "Library",
+      title: "Hook Library",
+      subtitle: "Deine getesteten Hooks mit echten Ergebnissen. Top-Performer fließen automatisch in neue Generierungen ein.",
+      empty: "Noch keine gespeicherten Hooks. Generiere Konzepte und speichere die, die du wirklich einsetzt.",
+      resultLabel: "Ergebnis",
+      metricLabel: "Metrik",
+      valuePlaceholder: "z.B. 42,5",
+      saveResult: "Ergebnis speichern",
+      resultSaved: "Gespeichert",
+      deleteButton: "Löschen",
+      close: "Schließen",
+      metrics: {
+        open_rate: "Öffnungsrate %",
+        ctr: "CTR %",
+        views: "Views",
+        engagement: "Engagement %",
+        other: "Sonstiges"
       }
     },
     history: {

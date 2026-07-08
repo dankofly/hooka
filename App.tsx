@@ -10,7 +10,6 @@ import { ConceptCard } from './components/ConceptCard.tsx';
 import { HistoryList } from './components/HistoryList.tsx';
 import { ProfileManager } from './components/ProfileManager.tsx';
 import { ConsentBanner } from './components/ConsentBanner.tsx';
-import { QuotaCounter } from './components/QuotaCounter.tsx';
 import { TRANSLATIONS } from './text.ts';
 
 // Lazy load modals for better initial bundle size
@@ -21,6 +20,7 @@ const AdminModal = lazy(() => import('./components/AdminModal.tsx').then(m => ({
 const UpgradeModal = lazy(() => import('./components/UpgradeModal.tsx').then(m => ({ default: m.UpgradeModal })));
 const PricingPage = lazy(() => import('./components/PricingPage.tsx').then(m => ({ default: m.PricingPage })));
 const WhyHookaPage = lazy(() => import('./components/WhyHookaPage.tsx').then(m => ({ default: m.WhyHookaPage })));
+const HookLibrary = lazy(() => import('./components/HookLibrary.tsx').then(m => ({ default: m.HookLibrary })));
 
 // Modal loading fallback
 const ModalFallback = () => (
@@ -83,7 +83,8 @@ const App: React.FC = () => {
     targetAudience: "",
     goal: "",
     speaker: "",
-    language: 'DE' // This controls the output generation language
+    language: 'DE', // This controls the output generation language
+    channel: 'VIDEO'
   });
   
   // Current translation object based on APP language
@@ -102,7 +103,9 @@ const App: React.FC = () => {
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [isPricingOpen, setIsPricingOpen] = useState(false);
   const [isWhyHookaOpen, setIsWhyHookaOpen] = useState(false);
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [quota, setQuota] = useState<UserQuota>({ usedGenerations: 0, limit: 10, isPremium: false });
+  const [checkoutBanner, setCheckoutBanner] = useState<'success' | 'cancelled' | null>(null);
 
   useEffect(() => {
     const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
@@ -190,30 +193,41 @@ const App: React.FC = () => {
       const [h, p] = await Promise.all([db.getHistory(), db.getProfiles()]);
       if (h) setHistory(h);
       if (p) setProfiles(p);
-    });
+    }).catch(err => console.warn("Initial data load failed:", err));
 
-    // Load quota (for anonymous users on first load)
-    db.getQuota().then(q => setQuota(q));
+    // Load quota for anonymous users only. Logged-in users get their quota
+    // via syncQuotaOnLogin above; racing both calls lets the slower anonymous
+    // response overwrite the correct premium state.
+    if (!existingIdentityUser) {
+      db.getQuota().then(q => setQuota(q)).catch(console.warn);
+    }
 
     // Handle checkout return URL params
     const urlParams = new URLSearchParams(window.location.search);
     const checkoutStatus = urlParams.get('checkout');
-    if (checkoutStatus === 'success') {
-      // Reload quota to reflect new premium status
-      setTimeout(() => {
-        const currentUser = authService.getCurrentUser();
-        if (currentUser) {
-          db.getQuota(currentUser.id).then(q => setQuota(q));
-        }
-      }, 1000);
-      // Clean up URL
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (checkoutStatus === 'cancelled') {
+    let checkoutTimeout: ReturnType<typeof setTimeout> | null = null;
+    let bannerTimeout: ReturnType<typeof setTimeout> | null = null;
+    if (checkoutStatus === 'success' || checkoutStatus === 'cancelled') {
+      setCheckoutBanner(checkoutStatus);
+      bannerTimeout = setTimeout(() => setCheckoutBanner(null), 8000);
+      if (checkoutStatus === 'success') {
+        // Reload quota to reflect new premium status (webhook needs a moment)
+        checkoutTimeout = setTimeout(() => {
+          const currentUser = authService.getCurrentUser();
+          if (currentUser) {
+            db.getQuota(currentUser.id).then(q => setQuota(q)).catch(console.warn);
+          }
+        }, 1500);
+      }
       // Clean up URL
       window.history.replaceState({}, '', window.location.pathname);
     }
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (checkoutTimeout) clearTimeout(checkoutTimeout);
+      if (bannerTimeout) clearTimeout(bannerTimeout);
+    };
   }, []);
 
   const handleAppLanguageChange = useCallback((lang: Language) => {
@@ -247,7 +261,7 @@ const App: React.FC = () => {
         setIsProfileModalOpen(true);
       }
 
-      analytics.track('login_success', { name: finalUser.name });
+      analytics.track('login_success', {});
 
       // Sync DB in background
       db.saveUser(finalUser).catch(err => console.warn("Background DB sync failed", err));
@@ -289,7 +303,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleGenerate = async () => {
-    // Check quota before generation
+    // Fast local pre-check for UX; the server enforces the limit authoritatively
     const canProceed = await db.canGenerate(user?.id);
     if (!canProceed) {
       setIsUpgradeModalOpen(true);
@@ -301,28 +315,44 @@ const App: React.FC = () => {
     setStatus(GenerationStatus.LOADING);
     setError(null);
     try {
-      const results = await generateViralHooks(brief);
+      const { concepts: results, quota: serverQuota } = await generateViralHooks(brief);
       setConcepts(results);
       setStatus(GenerationStatus.SUCCESS);
+
+      // Quota: prefer the authoritative server state, fall back to local count
+      if (serverQuota) {
+        setQuota(serverQuota);
+        db.incrementQuota(); // keep the local display counter in sync for anonymous fallback
+      } else {
+        db.incrementQuota();
+        setQuota(prev => ({ ...prev, usedGenerations: prev.usedGenerations + 1 }));
+      }
+
       const newItem = { id: Date.now().toString(), timestamp: Date.now(), concepts: results, brief: { ...brief } };
       setHistory(prev => [newItem, ...prev].slice(0, 10));
       setActiveHistoryId(newItem.id);
 
-      await db.saveHistoryItem(newItem);
-
-      // Increment quota after successful generation
-      await db.incrementQuota(user?.id);
-      // Update local quota state
-      setQuota(prev => ({ ...prev, usedGenerations: prev.usedGenerations + 1 }));
+      // Persisting history must never turn a successful generation into an error
+      try {
+        await db.saveHistoryItem(newItem);
+      } catch (persistErr) {
+        console.warn("History save failed (results stay visible):", persistErr);
+      }
 
       analytics.track('generate_hooks', {
         count: results.length,
         language: brief.language,
-        userId: user?.id || 'anonymous'
+        channel: brief.channel || 'VIDEO'
       });
 
     } catch (e: any) {
       console.error("Generation Error:", e);
+      if (e.message === "QUOTA_EXCEEDED") {
+        if (e.quota) setQuota(e.quota);
+        setStatus(GenerationStatus.IDLE);
+        setIsUpgradeModalOpen(true);
+        return;
+      }
       let msg = e.message || t.errors.engineError;
       if (e.message === "MISSING_API_KEY") msg = t.errors.missingKey;
       if (e.message === "INVALID_PROVIDER_OPENAI") msg = t.errors.invalidProviderOpenAI;
@@ -330,6 +360,18 @@ const App: React.FC = () => {
       setStatus(GenerationStatus.ERROR);
     }
   };
+
+  const handleSaveToLibrary = useCallback(async (concept: ViralConcept): Promise<boolean> => {
+    const id = `hk-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    return db.saveHook({
+      id,
+      channel: brief.channel || 'VIDEO',
+      hook: concept.hook,
+      script: concept.script,
+      audience: brief.targetAudience,
+      product: brief.productContext ? brief.productContext.substring(0, 200) : undefined
+    });
+  }, [brief.channel, brief.targetAudience, brief.productContext]);
 
   const toggleTheme = useCallback(() => {
     setIsDark(prev => {
@@ -377,6 +419,15 @@ const App: React.FC = () => {
             >
               {t.pricing.navTitle}
             </button>
+
+            {user && (
+              <button
+                onClick={() => setIsLibraryOpen(true)}
+                className="hidden md:block text-xs font-black text-zinc-600 dark:text-zinc-400 hover:text-purple-600 dark:hover:text-purple-400 uppercase tracking-widest transition-colors px-3 py-2"
+              >
+                {t.library.navTitle}
+              </button>
+            )}
 
             {/* Language Switcher - improved touch targets */}
             <div className="flex bg-zinc-100 dark:bg-zinc-900 rounded-lg p-1 border border-zinc-200 dark:border-zinc-800">
@@ -468,6 +519,14 @@ const App: React.FC = () => {
               >
                 {t.pricing.navTitle}
               </button>
+              {user && (
+                <button
+                  onClick={() => { setIsLibraryOpen(true); closeMobileMenu(); }}
+                  className="w-full min-h-[48px] px-4 py-3 text-left text-sm font-black text-zinc-700 dark:text-zinc-300 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-zinc-50 dark:hover:bg-zinc-900 rounded-lg uppercase tracking-widest transition-colors"
+                >
+                  {t.library.navTitle}
+                </button>
+              )}
 
               <div className="h-px bg-zinc-200 dark:bg-zinc-800 my-2" />
 
@@ -519,6 +578,18 @@ const App: React.FC = () => {
       )}
 
       <main id="main-content" className="max-w-7xl mx-auto px-4 md:px-8 py-10 md:py-16 space-y-12 md:space-y-20 relative z-10" role="main">
+        {checkoutBanner && (
+          <div className={`max-w-3xl mx-auto rounded-2xl p-5 border animate-in fade-in slide-in-from-top-4 ${
+            checkoutBanner === 'success'
+              ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-700 dark:text-emerald-400'
+              : 'bg-amber-500/10 border-amber-500/50 text-amber-700 dark:text-amber-400'
+          }`} role="status">
+            <p className="text-sm font-bold text-center">
+              {checkoutBanner === 'success' ? t.quota.checkoutSuccess : t.quota.checkoutCancelled}
+            </p>
+          </div>
+        )}
+
         <div className="text-center space-y-6 md:space-y-8 py-4 md:py-8 animate-in fade-in slide-in-from-bottom-12 duration-1000">
           <div className="inline-block px-4 py-1.5 md:px-5 md:py-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm">
             <span className="text-[9px] md:text-[10px] font-black text-zinc-500 dark:text-zinc-400 uppercase tracking-[0.3em] md:tracking-[0.35em] antialiased">{t.hero.badge}</span>
@@ -679,7 +750,7 @@ const App: React.FC = () => {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-10">
               {concepts.map((c, i) => (
                 <div key={`concept-${i}-${c.hook.substring(0, 20).replace(/\s/g, '-')}`} className={`animate-in fade-in slide-in-from-bottom-10 duration-1000 fill-mode-both`} style={{ animationDelay: `${i * 150}ms` }}>
-                  <ConceptCard concept={c} index={i} t={t} />
+                  <ConceptCard concept={c} index={i} t={t} onSaveToLibrary={user ? handleSaveToLibrary : undefined} />
                 </div>
               ))}
             </div>
@@ -756,6 +827,13 @@ const App: React.FC = () => {
           <WhyHookaPage
             isOpen={isWhyHookaOpen}
             onClose={() => setIsWhyHookaOpen(false)}
+            t={t}
+          />
+        )}
+        {isLibraryOpen && (
+          <HookLibrary
+            isOpen={isLibraryOpen}
+            onClose={() => setIsLibraryOpen(false)}
             t={t}
           />
         )}

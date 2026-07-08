@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { neon } from '@netlify/neon';
 import Stripe from 'stripe';
+import crypto from 'crypto';
 
 // Initialize Stripe (only if key is available)
 const stripe = process.env.STRIPE_SECRET_KEY
@@ -11,11 +12,15 @@ const stripe = process.env.STRIPE_SECRET_KEY
 // Stripe Price ID for €10/month subscription (set in Netlify env vars)
 const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
 
+// Gemini model used for all generation calls (also logged to analytics)
+const GEMINI_MODEL = 'gemini-2.0-flash';
+
 // SECURITY: Restrict CORS to allowed origins
 const ALLOWED_ORIGINS = [
+  "https://hooka.hypeakz.io",
+  "https://stirring-otter-3510b8.netlify.app",
   "https://hypeakz.io",
   "https://www.hypeakz.io",
-  "https://hypeakz.netlify.app",
   process.env.ALLOWED_ORIGIN // Optional custom origin from env
 ].filter(Boolean);
 
@@ -29,18 +34,45 @@ const getCorsOrigin = (requestOrigin: string | undefined) => {
     return requestOrigin;
   }
   // Default to primary domain
-  return "https://hypeakz.io";
+  return "https://hooka.hypeakz.io";
 };
 
 const getHeaders = (requestOrigin?: string) => ({
   "Access-Control-Allow-Origin": getCorsOrigin(requestOrigin),
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 });
 
 // SECURITY: Admin password MUST be set via environment variable
 // If not set, admin functionality is disabled
 const ADMIN_PASS = process.env.ADMIN_PASSWORD;
+
+// Constant-time comparison so response timing leaks nothing about the password
+const safeEqual = (a: unknown, b: unknown): boolean => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+};
+
+// Identity of the caller, derived from the verified Netlify Identity JWT.
+// Netlify populates context.clientContext.user only for valid Bearer tokens,
+// so this cannot be spoofed by sending an arbitrary userId in the payload.
+// Must mirror generateStableId() in services/auth.ts.
+const getAuthUserId = (context: any): string | null => {
+  const sub = context?.clientContext?.user?.sub;
+  return sub ? `user-${String(sub).substring(0, 12)}` : null;
+};
+
+const getAuthEmail = (context: any): string | null =>
+  context?.clientContext?.user?.email || null;
+
+const getClientIp = (event: any): string => {
+  return event.headers?.['x-nf-client-connection-ip']
+    || event.headers?.['x-forwarded-for']?.split(',')[0]?.trim()
+    || 'unknown';
+};
 
 const getSql = () => {
   const url = process.env.NETLIFY_DATABASE_URL;
@@ -53,23 +85,82 @@ let tablesInitPromise: Promise<any> | null = null;
 
 // Quota Constants
 const FREE_GENERATION_LIMIT = 10;
+const RESEARCH_DAILY_LIMIT = 10;
+const ADMIN_FAIL_LIMIT = 8; // failed attempts per IP per 10 minutes
 
 const ensureTables = async (sql: any) => {
   if (tablesInitPromise) return tablesInitPromise;
 
-  tablesInitPromise = Promise.all([
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_users (id TEXT PRIMARY KEY, name TEXT, brand TEXT, email TEXT, phone TEXT, created_at BIGINT)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_history (id TEXT PRIMARY KEY, timestamp BIGINT, brief JSONB, concepts JSONB)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_profiles (id TEXT PRIMARY KEY, name TEXT, brief JSONB)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_analytics (id TEXT PRIMARY KEY, event_name TEXT, timestamp BIGINT, metadata JSONB)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_settings (key TEXT PRIMARY KEY, value TEXT)`,
-    sql`CREATE TABLE IF NOT EXISTS hypeakz_quotas (user_id TEXT PRIMARY KEY, used_generations INT DEFAULT 0, is_premium BOOLEAN DEFAULT FALSE, stripe_customer_id TEXT, stripe_subscription_id TEXT, created_at BIGINT)`
-  ]).catch(e => {
+  tablesInitPromise = (async () => {
+    await Promise.all([
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_users (id TEXT PRIMARY KEY, name TEXT, brand TEXT, email TEXT, phone TEXT, created_at BIGINT)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_history (id TEXT PRIMARY KEY, timestamp BIGINT, brief JSONB, concepts JSONB)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_profiles (id TEXT PRIMARY KEY, name TEXT, brief JSONB)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_analytics (id TEXT PRIMARY KEY, event_name TEXT, timestamp BIGINT, metadata JSONB)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_settings (key TEXT PRIMARY KEY, value TEXT)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_quotas (user_id TEXT PRIMARY KEY, used_generations INT DEFAULT 0, is_premium BOOLEAN DEFAULT FALSE, stripe_customer_id TEXT, stripe_subscription_id TEXT, created_at BIGINT)`,
+      sql`CREATE TABLE IF NOT EXISTS hypeakz_hooks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        hook TEXT NOT NULL,
+        script TEXT,
+        audience TEXT,
+        product TEXT,
+        result_metric TEXT,
+        result_value REAL,
+        notes TEXT,
+        created_at BIGINT,
+        updated_at BIGINT
+      )`
+    ]);
+    // Per-user scoping for legacy tables (no-op when the column already exists)
+    await Promise.all([
+      sql`ALTER TABLE hypeakz_history ADD COLUMN IF NOT EXISTS user_id TEXT`,
+      sql`ALTER TABLE hypeakz_profiles ADD COLUMN IF NOT EXISTS user_id TEXT`
+    ]);
+  })().catch(e => {
     console.error("Table init error:", e);
     tablesInitPromise = null;
   });
 
   return tablesInitPromise;
+};
+
+// Atomically consume one generation. Returns allowed=false when the free
+// limit is reached and the caller is not premium. The WHERE clause on the
+// upsert makes check-and-increment race-free.
+const consumeGeneration = async (sql: any, key: string) => {
+  const rows = await sql`
+    INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at)
+    VALUES (${key}, 1, FALSE, ${Date.now()})
+    ON CONFLICT (user_id) DO UPDATE
+      SET used_generations = hypeakz_quotas.used_generations + 1
+      WHERE hypeakz_quotas.is_premium = TRUE
+         OR hypeakz_quotas.used_generations < ${FREE_GENERATION_LIMIT}
+    RETURNING used_generations, is_premium
+  `;
+  if (rows.length === 0) {
+    const cur = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
+    return {
+      allowed: false,
+      usedGenerations: cur[0]?.used_generations ?? FREE_GENERATION_LIMIT,
+      isPremium: cur[0]?.is_premium === true
+    };
+  }
+  return {
+    allowed: true,
+    usedGenerations: rows[0].used_generations,
+    isPremium: rows[0].is_premium === true
+  };
+};
+
+const refundGeneration = async (sql: any, key: string) => {
+  try {
+    await sql`UPDATE hypeakz_quotas SET used_generations = GREATEST(used_generations - 1, 0) WHERE user_id = ${key}`;
+  } catch (e) {
+    console.error("Quota refund failed:", e);
+  }
 };
 
 const fetchUrlContent = async (targetUrl: string): Promise<string | null> => {
@@ -126,14 +217,65 @@ const fetchUrlContent = async (targetUrl: string): Promise<string | null> => {
 };
 
 const getSystemInstruction = (language: string, customTuning: string = "") => `
-ROLE: Du agierst als einer der weltweit besten Marketingexperten, spezialisiert auf Neuro-Marketing, NLP und virale Psychologie. 
-MISSION: Erstelle Video-Skripte, die den kritischen Faktor des Gehirns umgehen und direkt das limbische System ansprechen.
+ROLE: Du agierst als einer der weltweit besten Marketingexperten, spezialisiert auf Neuro-Marketing, NLP und virale Psychologie.
+MISSION: Erstelle Content, der den kritischen Faktor des Gehirns umgeht und direkt das limbische System anspricht.
 TONE: Autoritär, direkt, hoch-konvertierend.
 SPRACHE: ${language === 'DE' ? 'Deutsch' : 'Englisch'}.
 ${customTuning ? `\nADMIN OVERRIDE:\n${customTuning}` : ''}
 `;
 
-export const handler = async (event: any) => {
+// --- CHANNEL PRESETS ---
+// Each channel redefines what the four output fields mean and adds
+// channel-specific craft rules. VIDEO keeps the original behavior.
+const CHANNEL_SPECS: Record<string, { label: string; fieldSpec: string; rules: string }> = {
+  VIDEO: {
+    label: 'Short-form video (TikTok, Reels, Shorts)',
+    fieldSpec: `- "hook": The spoken/visible opening line of the video (first 1-3 seconds).
+- "script": The full video script with rough timecodes, 20-40 seconds.
+- "strategy": Why this works neurologically (1-2 sentences).
+- "visualPrompt": A detailed visual/scene prompt usable in an AI video tool (setting, subject, camera, mood, style).`,
+    rules: `- The hook must stop the scroll within 1 second.
+- Write for spoken language, short sentences, no filler.`
+  },
+  EMAIL_SUBJECT: {
+    label: 'E-mail subject line',
+    fieldSpec: `- "hook": The subject line itself (max 50 characters, this is the product).
+- "script": The preheader (max 90 characters) followed by the first two opening sentences of the email body.
+- "strategy": Why this subject line gets opened (1-2 sentences).
+- "visualPrompt": An alternative B-variant of the subject line for A/B testing (different psychological angle).`,
+    rules: `- Max 50 characters per subject line, front-load the intrigue.
+- Deliverability: no ALL CAPS words, no excessive punctuation (!!, ??), at most one emoji, avoid classic spam triggers.
+- The subject must create an open loop that only opening the mail closes.
+- Subject and preheader must complement each other, never repeat each other.`
+  },
+  NEWSLETTER: {
+    label: 'Newsletter opener',
+    fieldSpec: `- "hook": The first sentence of the newsletter (the line readers see after opening).
+- "script": The complete opening section (2-3 short paragraphs) that pulls the reader into the main content.
+- "strategy": Why this opener keeps people reading (1-2 sentences).
+- "visualPrompt": A matching subject line suggestion for this opener (max 50 characters).`,
+    rules: `- First sentence max 12 words, concrete, no throat-clearing ("Ich hoffe, es geht dir gut" is forbidden).
+- Open with a scene, a number, a contrarian claim or a direct question.
+- Each paragraph max 3 sentences.`
+  },
+  FACEBOOK: {
+    label: 'Facebook post / ad',
+    fieldSpec: `- "hook": The first line of the post (visible above the "see more" fold, max 90 characters).
+- "script": The complete post text including line breaks and a clear CTA at the end.
+- "strategy": Why this works for the Facebook feed (1-2 sentences).
+- "visualPrompt": A detailed image/creative prompt for the accompanying visual (subject, composition, text overlay if any).`,
+    rules: `- The first line must work standalone, everything after the fold is bonus.
+- Short paragraphs (1-2 sentences), generous line breaks.
+- One single CTA, no link-spam wording ("Link in comments" style is allowed).`
+  }
+};
+
+const normalizeChannel = (raw: unknown): string => {
+  const c = typeof raw === 'string' ? raw.toUpperCase() : 'VIDEO';
+  return CHANNEL_SPECS[c] ? c : 'VIDEO';
+};
+
+export const handler = async (event: any, context: any) => {
   // Get origin from request headers for CORS
   const requestOrigin = event.headers?.origin || event.headers?.Origin;
   const headers = getHeaders(requestOrigin);
@@ -154,10 +296,14 @@ export const handler = async (event: any) => {
       return { statusCode: 400, headers, body: JSON.stringify({ error: "Invalid JSON" }) };
     }
 
-    const { action, payload } = body;
+    const { action, payload = {} } = body;
+    const authUserId = getAuthUserId(context);
+    const clientIp = getClientIp(event);
+    // Quota/rate-limit key: verified identity first, IP as anonymous fallback
+    const quotaKey = authUserId || `ip:${clientIp}`;
     let result: any = { success: true };
 
-    if (sql && ['log-analytics', 'save-user', 'save-history', 'save-profile', 'save-admin-prompt', 'generate-hooks', 'get-quota', 'increment-quota', 'sync-quota'].includes(action)) {
+    if (sql && ['log-analytics', 'save-user', 'save-history', 'save-profile', 'save-admin-prompt', 'generate-hooks', 'get-quota', 'increment-quota', 'sync-quota', 'research', 'save-hook', 'update-hook-result', 'get-hooks', 'delete-hook', 'verify-admin'].includes(action)) {
       await ensureTables(sql);
     }
 
@@ -167,50 +313,99 @@ export const handler = async (event: any) => {
       case 'log-analytics': {
         if (!sql) break;
         const { id, eventName, timestamp, metadata } = payload;
-        await sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${id}, ${eventName}, ${timestamp}, ${metadata})`;
+        if (typeof id !== 'string' || id.length > 64) break;
+        if (typeof eventName !== 'string' || eventName.length > 64) break;
+        if (metadata && JSON.stringify(metadata).length > 2048) break;
+        await sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${id}, ${eventName}, ${timestamp}, ${metadata}) ON CONFLICT (id) DO NOTHING`;
         break;
       }
       case 'save-user': {
         if (!sql) break;
+        // Only authenticated users are persisted, and only under their own verified id
+        if (!authUserId) break;
         const u = payload;
-        if (!u.id || !u.name) break; 
-        await sql`INSERT INTO hypeakz_users (id, name, brand, email, phone, created_at) VALUES (${u.id}, ${u.name}, ${u.brand}, ${u.email}, ${u.phone || null}, ${u.createdAt}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, brand = EXCLUDED.brand, email = EXCLUDED.email, phone = EXCLUDED.phone`;
+        if (!u.name) break;
+        await sql`INSERT INTO hypeakz_users (id, name, brand, email, phone, created_at) VALUES (${authUserId}, ${u.name}, ${u.brand}, ${getAuthEmail(context) || u.email}, ${u.phone || null}, ${u.createdAt || Date.now()}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, brand = EXCLUDED.brand, email = EXCLUDED.email, phone = EXCLUDED.phone`;
         break;
       }
       case 'get-user': {
-        if (!sql) { result = null; break; }
-        const rows = await sql`SELECT * FROM hypeakz_users WHERE id = ${payload.id} LIMIT 1`;
+        if (!sql || !authUserId) { result = null; break; }
+        const rows = await sql`SELECT * FROM hypeakz_users WHERE id = ${authUserId} LIMIT 1`;
         result = rows.length === 0 ? null : {
           id: rows[0].id, name: rows[0].name, brand: rows[0].brand, email: rows[0].email, phone: rows[0].phone, createdAt: Number(rows[0].created_at)
         };
         break;
       }
       case 'save-history': {
-        if (!sql) break;
+        if (!sql || !authUserId) break;
         const h = payload;
-        await sql`INSERT INTO hypeakz_history (id, timestamp, brief, concepts) VALUES (${h.id}, ${h.timestamp}, ${h.brief}, ${h.concepts}) ON CONFLICT (id) DO UPDATE SET timestamp = EXCLUDED.timestamp, brief = EXCLUDED.brief, concepts = EXCLUDED.concepts`;
+        await sql`INSERT INTO hypeakz_history (id, user_id, timestamp, brief, concepts) VALUES (${h.id}, ${authUserId}, ${h.timestamp}, ${h.brief}, ${h.concepts}) ON CONFLICT (id) DO UPDATE SET timestamp = EXCLUDED.timestamp, brief = EXCLUDED.brief, concepts = EXCLUDED.concepts WHERE hypeakz_history.user_id = ${authUserId}`;
         break;
       }
       case 'get-history': {
-        if (!sql) { result = []; break; }
-        const rows = await sql`SELECT id, timestamp, brief, concepts FROM hypeakz_history ORDER BY timestamp DESC LIMIT 20`;
+        if (!sql || !authUserId) { result = []; break; }
+        const rows = await sql`SELECT id, timestamp, brief, concepts FROM hypeakz_history WHERE user_id = ${authUserId} ORDER BY timestamp DESC LIMIT 20`;
         result = rows.map((r: any) => ({ id: r.id, timestamp: Number(r.timestamp), brief: r.brief, concepts: r.concepts }));
         break;
       }
       case 'save-profile': {
-        if (!sql) break;
+        if (!sql || !authUserId) break;
         const p = payload;
-        await sql`INSERT INTO hypeakz_profiles (id, name, brief) VALUES (${p.id}, ${p.name}, ${p.brief}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, brief = EXCLUDED.brief`;
+        await sql`INSERT INTO hypeakz_profiles (id, user_id, name, brief) VALUES (${p.id}, ${authUserId}, ${p.name}, ${p.brief}) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, brief = EXCLUDED.brief WHERE hypeakz_profiles.user_id = ${authUserId}`;
         break;
       }
       case 'get-profiles': {
-        if (!sql) { result = []; break; }
-        result = await sql`SELECT id, name, brief FROM hypeakz_profiles ORDER BY name ASC`;
+        if (!sql || !authUserId) { result = []; break; }
+        result = await sql`SELECT id, name, brief FROM hypeakz_profiles WHERE user_id = ${authUserId} ORDER BY name ASC`;
         break;
       }
       case 'delete-profile': {
-        if (!sql) break;
-        await sql`DELETE FROM hypeakz_profiles WHERE id = ${payload.id}`;
+        if (!sql || !authUserId) break;
+        await sql`DELETE FROM hypeakz_profiles WHERE id = ${payload.id} AND user_id = ${authUserId}`;
+        break;
+      }
+
+      // --- HOOK LIBRARY (the learning loop; auth required) ---
+      case 'save-hook': {
+        if (!sql || !authUserId) break;
+        const h = payload;
+        if (!h.id || !h.hook) break;
+        const channel = normalizeChannel(h.channel);
+        await sql`
+          INSERT INTO hypeakz_hooks (id, user_id, channel, hook, script, audience, product, notes, created_at, updated_at)
+          VALUES (${h.id}, ${authUserId}, ${channel}, ${String(h.hook).substring(0, 500)}, ${h.script || null}, ${h.audience || null}, ${h.product || null}, ${h.notes || null}, ${Date.now()}, ${Date.now()})
+          ON CONFLICT (id) DO UPDATE SET hook = EXCLUDED.hook, script = EXCLUDED.script, notes = EXCLUDED.notes, updated_at = EXCLUDED.updated_at
+          WHERE hypeakz_hooks.user_id = ${authUserId}
+        `;
+        break;
+      }
+      case 'update-hook-result': {
+        if (!sql || !authUserId) break;
+        const { id, resultMetric, resultValue, notes } = payload;
+        if (!id || typeof resultValue !== 'number') break;
+        await sql`
+          UPDATE hypeakz_hooks
+          SET result_metric = ${resultMetric || 'performance'}, result_value = ${resultValue}, notes = ${notes || null}, updated_at = ${Date.now()}
+          WHERE id = ${id} AND user_id = ${authUserId}
+        `;
+        break;
+      }
+      case 'get-hooks': {
+        if (!sql || !authUserId) { result = []; break; }
+        const channel = payload.channel ? normalizeChannel(payload.channel) : null;
+        const rows = channel
+          ? await sql`SELECT id, channel, hook, script, audience, product, result_metric, result_value, notes, created_at FROM hypeakz_hooks WHERE user_id = ${authUserId} AND channel = ${channel} ORDER BY created_at DESC LIMIT 100`
+          : await sql`SELECT id, channel, hook, script, audience, product, result_metric, result_value, notes, created_at FROM hypeakz_hooks WHERE user_id = ${authUserId} ORDER BY created_at DESC LIMIT 100`;
+        result = rows.map((r: any) => ({
+          id: r.id, channel: r.channel, hook: r.hook, script: r.script, audience: r.audience,
+          product: r.product, resultMetric: r.result_metric, resultValue: r.result_value,
+          notes: r.notes, createdAt: Number(r.created_at)
+        }));
+        break;
+      }
+      case 'delete-hook': {
+        if (!sql || !authUserId) break;
+        await sql`DELETE FROM hypeakz_hooks WHERE id = ${payload.id} AND user_id = ${authUserId}`;
         break;
       }
 
@@ -220,56 +415,43 @@ export const handler = async (event: any) => {
           result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
           break;
         }
-        const { userId } = payload;
-        if (!userId) {
-          result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
-          break;
-        }
-        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+        const key = authUserId || (payload.userId ? String(payload.userId) : `ip:${clientIp}`);
+        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
         if (rows.length === 0) {
           result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
         } else {
-          const isPremium = rows[0].is_premium === true;
           result = {
             usedGenerations: rows[0].used_generations || 0,
             limit: FREE_GENERATION_LIMIT,
-            isPremium
+            isPremium: rows[0].is_premium === true
           };
         }
         break;
       }
       case 'increment-quota': {
-        if (!sql) break;
-        const { userId } = payload;
-        if (!userId) break;
-        // Upsert: Insert if not exists, increment if exists
-        await sql`
-          INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at)
-          VALUES (${userId}, 1, FALSE, ${Date.now()})
-          ON CONFLICT (user_id) DO UPDATE SET used_generations = hypeakz_quotas.used_generations + 1
-        `;
+        // Kept for backward compatibility; generation now increments server-side.
         break;
       }
       case 'sync-quota': {
         // Sync localStorage count with DB (takes higher value)
         if (!sql) break;
-        const { userId, localCount } = payload;
-        if (!userId || typeof localCount !== 'number') break;
+        const { localCount } = payload;
+        const key = authUserId;
+        if (!key || typeof localCount !== 'number') break;
+        const safeLocal = Math.max(0, Math.min(Math.floor(localCount), FREE_GENERATION_LIMIT));
 
-        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
 
         if (rows.length === 0) {
-          // New user: use localCount
-          await sql`INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at) VALUES (${userId}, ${localCount}, FALSE, ${Date.now()})`;
-          result = { usedGenerations: localCount, limit: FREE_GENERATION_LIMIT, isPremium: false };
+          await sql`INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at) VALUES (${key}, ${safeLocal}, FALSE, ${Date.now()})`;
+          result = { usedGenerations: safeLocal, limit: FREE_GENERATION_LIMIT, isPremium: false };
         } else {
-          // Existing user: take the higher value
           const dbCount = rows[0].used_generations || 0;
           const isPremium = rows[0].is_premium === true;
-          const finalCount = Math.max(dbCount, localCount);
+          const finalCount = Math.max(dbCount, safeLocal);
 
           if (finalCount > dbCount) {
-            await sql`UPDATE hypeakz_quotas SET used_generations = ${finalCount} WHERE user_id = ${userId}`;
+            await sql`UPDATE hypeakz_quotas SET used_generations = ${finalCount} WHERE user_id = ${key}`;
           }
 
           result = { usedGenerations: finalCount, limit: FREE_GENERATION_LIMIT, isPremium };
@@ -279,35 +461,36 @@ export const handler = async (event: any) => {
 
       // --- STRIPE CHECKOUT ---
       case 'create-checkout': {
-        // Debug: Check what's configured
-        const stripeConfigured = !!stripe;
-        const priceConfigured = !!STRIPE_PRICE_ID;
-
-        if (!stripeConfigured) {
+        if (!stripe) {
           console.error("Stripe not initialized - STRIPE_SECRET_KEY missing");
           return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing secret key)" }) };
         }
-        if (!priceConfigured) {
+        if (!STRIPE_PRICE_ID) {
           console.error("STRIPE_PRICE_ID not set");
           return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing price ID)" }) };
         }
 
-        const { userId, userEmail, successUrl, cancelUrl } = payload;
-        if (!userId || !userEmail) {
-          return { statusCode: 400, headers, body: JSON.stringify({ error: "Missing userId or userEmail" }) };
+        // Checkout requires a verified identity; the subscription must be
+        // bound to the JWT-derived user id, not a client-chosen one.
+        const checkoutUserId = authUserId;
+        const checkoutEmail = getAuthEmail(context) || payload.userEmail;
+        if (!checkoutUserId || !checkoutEmail) {
+          return { statusCode: 401, headers, body: JSON.stringify({ error: "Login required for checkout" }) };
         }
+
+        const { successUrl, cancelUrl } = payload;
 
         try {
           const session = await stripe.checkout.sessions.create({
             mode: 'subscription',
             payment_method_types: ['card'],
-            customer_email: userEmail,
+            customer_email: checkoutEmail,
             line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-            success_url: successUrl || 'https://hypeakz.io/?checkout=success',
-            cancel_url: cancelUrl || 'https://hypeakz.io/?checkout=cancelled',
-            metadata: { userId },
+            success_url: successUrl || 'https://hooka.hypeakz.io/?checkout=success',
+            cancel_url: cancelUrl || 'https://hooka.hypeakz.io/?checkout=cancelled',
+            metadata: { userId: checkoutUserId },
             subscription_data: {
-              metadata: { userId }
+              metadata: { userId: checkoutUserId }
             }
           });
 
@@ -324,17 +507,12 @@ export const handler = async (event: any) => {
 
       case 'check-subscription': {
         // Check if user has active subscription (called periodically)
-        if (!sql) {
-          result = { isPremium: false };
-          break;
-        }
-        const { userId } = payload;
-        if (!userId) {
+        if (!sql || !authUserId) {
           result = { isPremium: false };
           break;
         }
 
-        const rows = await sql`SELECT is_premium, stripe_subscription_id FROM hypeakz_quotas WHERE user_id = ${userId} LIMIT 1`;
+        const rows = await sql`SELECT is_premium, stripe_subscription_id FROM hypeakz_quotas WHERE user_id = ${authUserId} LIMIT 1`;
         if (rows.length === 0 || !rows[0].is_premium) {
           result = { isPremium: false };
           break;
@@ -347,7 +525,7 @@ export const handler = async (event: any) => {
             const isActive = ['active', 'trialing'].includes(subscription.status);
             if (!isActive) {
               // Update DB if subscription is no longer active
-              await sql`UPDATE hypeakz_quotas SET is_premium = FALSE WHERE user_id = ${userId}`;
+              await sql`UPDATE hypeakz_quotas SET is_premium = FALSE WHERE user_id = ${authUserId}`;
               result = { isPremium: false };
               break;
             }
@@ -368,14 +546,26 @@ export const handler = async (event: any) => {
           result = { success: false };
           break;
         }
-        const isValid = payload.password === ADMIN_PASS;
-        await new Promise(r => setTimeout(r, 300)); // Prevent timing attacks
+        // Rate limit: block after too many failed attempts per IP
+        if (sql) {
+          const tenMinAgo = Date.now() - 10 * 60 * 1000;
+          const fails = await sql`SELECT COUNT(*) FROM hypeakz_analytics WHERE event_name = 'admin_fail' AND timestamp > ${tenMinAgo} AND metadata->>'ip' = ${clientIp}`;
+          if (parseInt(fails[0].count) >= ADMIN_FAIL_LIMIT) {
+            return { statusCode: 429, headers, body: JSON.stringify({ error: "Too many attempts. Try again later." }) };
+          }
+        }
+        const isValid = safeEqual(payload.password, ADMIN_PASS);
+        if (!isValid && sql) {
+          const failId = `af-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${failId}, 'admin_fail', ${Date.now()}, ${{ ip: clientIp }})`.catch(console.error);
+        }
+        await new Promise(r => setTimeout(r, 300));
         result = { success: isValid };
         break;
       }
       case 'get-admin-stats': {
          // Admin disabled if no password configured
-         if (!ADMIN_PASS || payload.password !== ADMIN_PASS) {
+         if (!ADMIN_PASS || !safeEqual(payload.password, ADMIN_PASS)) {
            return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
          }
          if (!sql) {
@@ -461,6 +651,10 @@ export const handler = async (event: any) => {
          break;
       }
       case 'get-admin-prompt': {
+        // The custom system prompt is operator IP, do not leak it unauthenticated
+        if (!ADMIN_PASS || !safeEqual(payload.password, ADMIN_PASS)) {
+          return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
+        }
         if (!sql) { result = { prompt: "" }; break; }
         const rows = await sql`SELECT value FROM hypeakz_settings WHERE key = 'system_prompt' LIMIT 1`;
         result = { prompt: rows.length ? rows[0].value : "" };
@@ -468,7 +662,7 @@ export const handler = async (event: any) => {
       }
       case 'save-admin-prompt': {
         // Admin disabled if no password configured
-        if (!ADMIN_PASS || payload.password !== ADMIN_PASS) {
+        if (!ADMIN_PASS || !safeEqual(payload.password, ADMIN_PASS)) {
           return { statusCode: 401, headers, body: JSON.stringify({ error: "Unauthorized" }) };
         }
         if (!sql) throw new Error("No Database");
@@ -480,6 +674,18 @@ export const handler = async (event: any) => {
       // --- RESEARCH ---
       case 'research': {
         if (!apiKey) throw new Error("Missing API Key");
+
+        // Rate limit: research burns Gemini + Jina budget, cap it per caller and day
+        if (sql) {
+          const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+          const used = await sql`SELECT COUNT(*) FROM hypeakz_analytics WHERE event_name = 'research' AND timestamp > ${dayAgo} AND metadata->>'key' = ${quotaKey}`;
+          if (parseInt(used[0].count) >= RESEARCH_DAILY_LIMIT) {
+            return { statusCode: 429, headers, body: JSON.stringify({ error: "RESEARCH_LIMIT: Tageslimit für Auto-Briefings erreicht." }) };
+          }
+          const rId = `rs-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${rId}, 'research', ${Date.now()}, ${{ key: quotaKey }})`.catch(console.error);
+        }
+
         const ai = new GoogleGenAI({ apiKey });
         const { url, language } = payload;
 
@@ -560,7 +766,7 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         }
 
         const response = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
+          model: GEMINI_MODEL,
           contents: prompt,
           config: config,
         });
@@ -627,108 +833,171 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
       // --- GENERATE HOOKS ---
       case 'generate-hooks': {
         if (!apiKey) throw new Error("Missing API Key");
-        const ai = new GoogleGenAI({ apiKey });
         const { brief } = payload;
-        
-        let customTuning = "";
+        if (!brief) throw new Error("Missing brief");
+        const channel = normalizeChannel(brief.channel);
+        const spec = CHANNEL_SPECS[channel];
+
+        // SECURITY: enforce the free limit server-side, atomically, BEFORE
+        // spending Gemini tokens. Anonymous callers are keyed by IP.
+        let quotaState: { usedGenerations: number; isPremium: boolean } | null = null;
         if (sql) {
-          try {
-             const rows = await sql`SELECT value FROM hypeakz_settings WHERE key = 'system_prompt' LIMIT 1`;
-             if (rows.length) customTuning = rows[0].value;
-          } catch (e) {}
+          const consumed = await consumeGeneration(sql, quotaKey);
+          if (!consumed.allowed) {
+            return { statusCode: 429, headers, body: JSON.stringify({
+              error: "QUOTA_EXCEEDED",
+              quota: { usedGenerations: consumed.usedGenerations, limit: FREE_GENERATION_LIMIT, isPremium: consumed.isPremium }
+            }) };
+          }
+          quotaState = { usedGenerations: consumed.usedGenerations, isPremium: consumed.isPremium };
         }
 
-        const scores = brief.targetScores || { patternInterrupt: 70, emotionalIntensity: 70, curiosityGap: 70, scarcity: 50 };
-        const nlpConstraints = [
-          brief.contentContext ? `- Content Format: ${brief.contentContext}` : '',
-          brief.limbicType ? `- Limbic® Target Profile (Emotional System): ${brief.limbicType}` : '',
-          brief.focusKeyword ? `- Focus Keyword (Must be included): ${brief.focusKeyword}` : '',
-          brief.patternType ? `- Specific Pattern Interrupt: ${brief.patternType}` : '',
-          brief.repSystem ? `- Sensory Modality (VAK): ${brief.repSystem}` : '',
-          brief.motivation ? `- Meta-Program (Motivation): ${brief.motivation}` : '',
-          brief.decisionStyle ? `- Meta-Program (Decision): ${brief.decisionStyle}` : '',
-          brief.presupposition ? `- Presupposition: ${brief.presupposition}` : '',
-          brief.chunking ? `- Chunking Level: ${brief.chunking}` : '',
-          brief.triggerWords && brief.triggerWords.length > 0 ? `- Mandatory Trigger Words: ${brief.triggerWords.join(', ')}` : ''
-        ].filter(Boolean).join('\n');
+        try {
+          const ai = new GoogleGenAI({ apiKey });
 
-        const prompt = `Erstelle 4 virale Video-Konzepte. 
-        Context: ${brief.productContext}. 
-        Goal: ${brief.goal}. 
-        Audience: ${brief.targetAudience}.
-        Speaker Style: ${brief.speaker}.
-        
-        NLP & STRUCTURAL CONSTRAINTS (Apply these strictly):
-        ${nlpConstraints || "No specific NLP constraints selected. Optimize for maximum retention."}
+          let customTuning = "";
+          if (sql) {
+            try {
+               const rows = await sql`SELECT value FROM hypeakz_settings WHERE key = 'system_prompt' LIMIT 1`;
+               if (rows.length) customTuning = rows[0].value;
+            } catch (e) {}
+          }
 
-        TARGET NEURO METRICS (Aim for these levels in your script writing):
-        - Pattern Interrupt: ${scores.patternInterrupt}/100 (Shock factor, unexpected start)
-        - Emotional Intensity: ${scores.emotionalIntensity}/100 (Feeling depth)
-        - Curiosity Gap: ${scores.curiosityGap}/100 (Open loops)
-        - Scarcity/FOMO: ${scores.scarcity}/100 (Urgency)
-        `;
+          // THE LEARNING LOOP: inject the caller's own proven winners/losers
+          // for this channel as few-shot guidance.
+          let learnings = "";
+          if (sql && authUserId) {
+            try {
+              const rated = await sql`
+                SELECT hook, result_metric, result_value FROM hypeakz_hooks
+                WHERE user_id = ${authUserId} AND channel = ${channel} AND result_value IS NOT NULL
+                ORDER BY result_value DESC LIMIT 50
+              `;
+              if (rated.length >= 2) {
+                const winners = rated.slice(0, 5);
+                const losers = rated.length >= 8 ? rated.slice(-3) : [];
+                learnings = `
+LEARNED FROM THIS USER'S REAL PERFORMANCE DATA (${spec.label}):
+Top performers (imitate the underlying psychological patterns, do NOT copy them verbatim):
+${winners.map((w: any) => `- "${w.hook}" (${w.result_metric}: ${w.result_value})`).join('\n')}
+${losers.length ? `Weak performers (avoid these patterns):\n${losers.map((l: any) => `- "${l.hook}" (${l.result_metric}: ${l.result_value})`).join('\n')}` : ''}`;
+              }
+            } catch (e) {
+              console.warn("Hook library lookup failed:", e);
+            }
+          }
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
-          contents: prompt,
-          config: {
-            systemInstruction: getSystemInstruction(brief.language, customTuning),
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.ARRAY, 
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  hook: { type: Type.STRING },
-                  script: { type: Type.STRING },
-                  strategy: { type: Type.STRING },
-                  visualPrompt: { type: Type.STRING },
-                  scores: {
-                    type: Type.OBJECT,
-                    properties: {
-                      patternInterrupt: { type: Type.INTEGER },
-                      emotionalIntensity: { type: Type.INTEGER },
-                      curiosityGap: { type: Type.INTEGER },
-                      scarcity: { type: Type.INTEGER },
-                    },
-                    required: ["patternInterrupt", "emotionalIntensity", "curiosityGap", "scarcity"]
-                  }
+          const scores = brief.targetScores || { patternInterrupt: 70, emotionalIntensity: 70, curiosityGap: 70, scarcity: 50 };
+          const nlpConstraints = [
+            brief.contentContext ? `- Content Format: ${brief.contentContext}` : '',
+            brief.limbicType ? `- Limbic® Target Profile (Emotional System): ${brief.limbicType}` : '',
+            brief.focusKeyword ? `- Focus Keyword (Must be included): ${brief.focusKeyword}` : '',
+            brief.patternType ? `- Specific Pattern Interrupt: ${brief.patternType}` : '',
+            brief.repSystem ? `- Sensory Modality (VAK): ${brief.repSystem}` : '',
+            brief.motivation ? `- Meta-Program (Motivation): ${brief.motivation}` : '',
+            brief.decisionStyle ? `- Meta-Program (Decision): ${brief.decisionStyle}` : '',
+            brief.presupposition ? `- Presupposition: ${brief.presupposition}` : '',
+            brief.chunking ? `- Chunking Level: ${brief.chunking}` : '',
+            brief.triggerWords && brief.triggerWords.length > 0 ? `- Mandatory Trigger Words: ${brief.triggerWords.join(', ')}` : ''
+          ].filter(Boolean).join('\n');
+
+          const prompt = `Erstelle 4 Content-Konzepte für den Kanal: ${spec.label}.
+          Context: ${brief.productContext}.
+          Goal: ${brief.goal}.
+          Audience: ${brief.targetAudience}.
+          Speaker Style: ${brief.speaker}.
+
+          OUTPUT FIELD DEFINITIONS FOR THIS CHANNEL:
+          ${spec.fieldSpec}
+
+          CHANNEL RULES (mandatory):
+          ${spec.rules}
+          ${learnings}
+
+          NLP & STRUCTURAL CONSTRAINTS (Apply these strictly):
+          ${nlpConstraints || "No specific NLP constraints selected. Optimize for maximum retention."}
+
+          TARGET NEURO METRICS (Aim for these levels in your writing):
+          - Pattern Interrupt: ${scores.patternInterrupt}/100 (Shock factor, unexpected start)
+          - Emotional Intensity: ${scores.emotionalIntensity}/100 (Feeling depth)
+          - Curiosity Gap: ${scores.curiosityGap}/100 (Open loops)
+          - Scarcity/FOMO: ${scores.scarcity}/100 (Urgency)
+          `;
+
+          const response = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: prompt,
+            config: {
+              systemInstruction: getSystemInstruction(brief.language, customTuning),
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    hook: { type: Type.STRING },
+                    script: { type: Type.STRING },
+                    strategy: { type: Type.STRING },
+                    visualPrompt: { type: Type.STRING },
+                    scores: {
+                      type: Type.OBJECT,
+                      properties: {
+                        patternInterrupt: { type: Type.INTEGER },
+                        emotionalIntensity: { type: Type.INTEGER },
+                        curiosityGap: { type: Type.INTEGER },
+                        scarcity: { type: Type.INTEGER },
+                      },
+                      required: ["patternInterrupt", "emotionalIntensity", "curiosityGap", "scarcity"]
+                    }
+                  },
+                  required: ["hook", "script", "strategy", "visualPrompt", "scores"]
                 },
-                required: ["hook", "script", "strategy", "visualPrompt", "scores"]
               },
             },
-          },
-        });
+          });
 
-        if (sql) {
-          const totalTokens = response.usageMetadata?.totalTokenCount || 0;
-          const timestamp = Date.now();
+          if (sql) {
+            const totalTokens = response.usageMetadata?.totalTokenCount || 0;
+            const timestamp = Date.now();
 
-          // Log AI cost
-          const costLogId = timestamp.toString() + Math.random().toString(36).substring(7);
-          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${costLogId}, 'ai_cost', ${timestamp}, ${{ tokens: totalTokens, model: 'gemini-3-flash' }})`.catch(console.error);
+            // Log AI cost
+            const costLogId = timestamp.toString() + Math.random().toString(36).substring(7);
+            sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${costLogId}, 'ai_cost', ${timestamp}, ${{ tokens: totalTokens, model: GEMINI_MODEL }})`.catch(console.error);
 
-          // Log generation with all parameters for stats
-          const genLogId = timestamp.toString() + Math.random().toString(36).substring(2, 9);
-          const generationMeta = {
-            language: brief.language || 'DE',
-            contentContext: brief.contentContext || null,
-            limbicType: brief.limbicType || null,
-            focusKeyword: brief.focusKeyword ? true : false, // Just track if used, not the value
-            patternType: brief.patternType || null,
-            repSystem: brief.repSystem || null,
-            motivation: brief.motivation || null,
-            decisionStyle: brief.decisionStyle || null,
-            presupposition: brief.presupposition || null,
-            chunking: brief.chunking || null,
-            triggerWordsUsed: brief.triggerWords && brief.triggerWords.length > 0,
-            targetScores: scores,
-            tokens: totalTokens
+            // Log generation with all parameters for stats
+            const genLogId = timestamp.toString() + Math.random().toString(36).substring(2, 9);
+            const generationMeta = {
+              language: brief.language || 'DE',
+              channel,
+              contentContext: brief.contentContext || null,
+              limbicType: brief.limbicType || null,
+              focusKeyword: brief.focusKeyword ? true : false, // Just track if used, not the value
+              patternType: brief.patternType || null,
+              repSystem: brief.repSystem || null,
+              motivation: brief.motivation || null,
+              decisionStyle: brief.decisionStyle || null,
+              presupposition: brief.presupposition || null,
+              chunking: brief.chunking || null,
+              triggerWordsUsed: brief.triggerWords && brief.triggerWords.length > 0,
+              targetScores: scores,
+              tokens: totalTokens
+            };
+            sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${genLogId}, 'generation', ${timestamp}, ${generationMeta})`.catch(console.error);
+          }
+
+          let concepts: any[] = [];
+          try { concepts = JSON.parse(response.text || "[]"); } catch(e) { concepts = []; }
+          result = {
+            concepts,
+            quota: quotaState
+              ? { usedGenerations: quotaState.usedGenerations, limit: FREE_GENERATION_LIMIT, isPremium: quotaState.isPremium }
+              : null
           };
-          sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${genLogId}, 'generation', ${timestamp}, ${generationMeta})`.catch(console.error);
+        } catch (genError) {
+          // Generation failed after the quota was consumed: give the credit back
+          if (sql) await refundGeneration(sql, quotaKey);
+          throw genError;
         }
-
-        try { result = JSON.parse(response.text || "[]"); } catch(e) { result = []; }
         break;
       }
 

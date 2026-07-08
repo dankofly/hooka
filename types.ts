@@ -32,12 +32,31 @@ export enum GenerationStatus {
 
 export type Language = 'DE' | 'EN';
 
+// Output channel: redefines what hook/script/visualPrompt mean per channel
+export type ContentChannel = 'VIDEO' | 'EMAIL_SUBJECT' | 'NEWSLETTER' | 'FACEBOOK';
+
+// A hook stored in the personal library, optionally with a real-world result.
+// Rated hooks feed back into generation as few-shot examples.
+export interface LibraryHook {
+  id: string;
+  channel: ContentChannel;
+  hook: string;
+  script?: string;
+  audience?: string;
+  product?: string;
+  resultMetric?: string;
+  resultValue?: number;
+  notes?: string;
+  createdAt: number;
+}
+
 export interface MarketingBrief {
   productContext: string;
   targetAudience: string;
   goal: string;
   speaker: string;
   language: Language;
+  channel?: ContentChannel;
   sources?: { title: string; uri: string }[];
   targetScores?: NeuroScores;
   
@@ -126,6 +145,11 @@ export interface TranslationObject {
       buttonIdle: string;
       buttonActive: string;
       sourcesTitle: string;
+      invalidUrl: string;
+    };
+    channel: {
+      label: string;
+      options: Record<ContentChannel, string>;
     };
     fields: {
       context: { label: string; placeholder: string; help: string };
@@ -146,14 +170,31 @@ export interface TranslationObject {
   results: {
     headline: string;
     copySuccess?: string;
+    saveToLibrary: string;
+    savedToLibrary: string;
     labels: {
       hook: string;
       script: string;
+      visual: string;
       pattern: string;
       intensity: string;
       gap: string;
       fomo: string;
     };
+  };
+  library: {
+    navTitle: string;
+    title: string;
+    subtitle: string;
+    empty: string;
+    resultLabel: string;
+    metricLabel: string;
+    valuePlaceholder: string;
+    saveResult: string;
+    resultSaved: string;
+    deleteButton: string;
+    close: string;
+    metrics: Record<string, string>;
   };
   history: {
     title?: string;
@@ -211,6 +252,22 @@ export interface TranslationObject {
     badge: string;
     headline: string;
     subheadline: string;
+    hooksIntroTitle: string;
+    hooksIntroText: string;
+    hooksIntroText2: string;
+    hooksWhereTitle: string;
+    hooksWhere1Title: string;
+    hooksWhere1Desc: string;
+    hooksWhere2Title: string;
+    hooksWhere2Desc: string;
+    hooksWhere3Title: string;
+    hooksWhere3Desc: string;
+    hooksWhere4Title: string;
+    hooksWhere4Desc: string;
+    hooksWhere5Title: string;
+    hooksWhere5Desc: string;
+    hooksWhere6Title: string;
+    hooksWhere6Desc: string;
     problemTitle: string;
     problemText: string;
     solutionTitle: string;

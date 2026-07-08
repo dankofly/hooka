@@ -46,6 +46,9 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
   });
   const [isLoading, setIsLoading] = useState(false);
   const [status, setStatus] = useState('');
+  // Guards against overwriting the live system prompt with an empty string
+  // when the initial load failed silently.
+  const [promptLoaded, setPromptLoaded] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -79,9 +82,10 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
 
   const loadDashboardData = async () => {
     setIsLoading(true);
+    setPromptLoaded(false);
     try {
-      const [p, s] = await Promise.all([
-        getAdminPrompt().catch(() => ""),
+      const [promptResult, s] = await Promise.all([
+        getAdminPrompt(password).then(p => ({ ok: true as const, value: p })).catch(() => ({ ok: false as const, value: "" })),
         getAdminStats(password).catch(() => ({
           userCount: 0,
           generationCount: 0,
@@ -91,7 +95,11 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
           parameterStats: {}
         }))
       ]);
-      setPrompt(p);
+      setPrompt(promptResult.value);
+      // Only allow saving when the current prompt actually loaded,
+      // otherwise a "Commit" would wipe the live system prompt.
+      setPromptLoaded(promptResult.ok);
+      if (!promptResult.ok) setStatus('PROMPT LOAD FAILED. SAVE DISABLED. RECONNECT.');
       setStats(s);
     } catch (e) {
       setStatus('DB CONNECTION ERROR');
@@ -101,6 +109,13 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
   };
 
   const handleSave = async () => {
+    if (!promptLoaded) {
+      setStatus('SAVE BLOCKED: PROMPT NOT LOADED.');
+      return;
+    }
+    if (!prompt.trim() && !window.confirm('Prompt is empty. Overwrite the live system prompt with an empty value?')) {
+      return;
+    }
     setIsLoading(true);
     setStatus('UPLOADING TO NEURAL CORE...');
     try {
@@ -282,7 +297,7 @@ export const AdminModal: React.FC<AdminModalProps> = ({ isOpen, onClose, t }) =>
                  </div>
                  <button
                   onClick={handleSave}
-                  disabled={isLoading}
+                  disabled={isLoading || !promptLoaded}
                   className="px-8 py-3 bg-green-600 text-black font-bold tracking-widest hover:bg-green-500 disabled:opacity-50 uppercase text-xs"
                 >
                   {isLoading ? t.admin.compiling : t.admin.commit}

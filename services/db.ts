@@ -1,5 +1,6 @@
 
-import { HistoryItem, BriefProfile, UserProfile, UserQuota } from '../types.ts';
+import { HistoryItem, BriefProfile, UserProfile, UserQuota, LibraryHook, ContentChannel } from '../types.ts';
+import { buildAuthHeaders } from './token.ts';
 
 // Constants
 const API_TIMEOUT_MS = 5000; // 5 seconds timeout for DB calls
@@ -37,14 +38,14 @@ const storage = {
 type ApiResponse<T = unknown> = T | null;
 
 // Helper to call the API with Timeout
-const callApi = async <T = unknown>(action: string, payload: Record<string, unknown> = {}): Promise<ApiResponse<T>> => {
+const callApi = async <T = unknown>(action: string, payload: object = {}): Promise<ApiResponse<T>> => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
   try {
     const response = await fetch('/.netlify/functions/api', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await buildAuthHeaders(),
       body: JSON.stringify({ action, payload }),
       signal: controller.signal
     });
@@ -127,7 +128,7 @@ export const db = {
 
   async getUser(id: string): Promise<UserProfile | null> {
     // 1. Try Cloud
-    const cloudResult = await callApi('get-user', { id });
+    const cloudResult = await callApi<UserProfile>('get-user', { id });
     if (cloudResult) {
       // Sync local backup
       localStore.saveUser(cloudResult);
@@ -138,7 +139,7 @@ export const db = {
   },
 
   async getHistory(): Promise<HistoryItem[]> {
-    const cloudResult = await callApi('get-history');
+    const cloudResult = await callApi<HistoryItem[]>('get-history');
     
     if (cloudResult && Array.isArray(cloudResult) && cloudResult.length > 0) {
       storage.set(LS_KEYS.HISTORY, JSON.stringify(cloudResult));
@@ -154,7 +155,7 @@ export const db = {
   },
 
   async getProfiles(): Promise<BriefProfile[]> {
-    const cloudResult = await callApi('get-profiles');
+    const cloudResult = await callApi<BriefProfile[]>('get-profiles');
     
     if (cloudResult && Array.isArray(cloudResult) && cloudResult.length > 0) {
       storage.set(LS_KEYS.PROFILES, JSON.stringify(cloudResult));
@@ -207,16 +208,11 @@ export const db = {
   },
 
   /**
-   * Increment quota after successful generation
+   * Increment the local display counter. The server increments its own
+   * counter atomically inside generate-hooks, so no API call is needed.
    */
-  async incrementQuota(userId?: string): Promise<void> {
-    // Always increment local storage (for anonymous tracking)
+  async incrementQuota(_userId?: string): Promise<void> {
     this.incrementLocalQuotaCount();
-
-    // If logged in, also update DB
-    if (userId) {
-      await callApi('increment-quota', { userId });
-    }
   },
 
   /**
@@ -298,5 +294,33 @@ export const db = {
   async checkSubscription(userId: string): Promise<boolean> {
     const result = await callApi<{ isPremium: boolean }>('check-subscription', { userId });
     return result?.isPremium || false;
+  },
+
+  // --- HOOK LIBRARY (learning loop) ---
+
+  async saveHook(hook: {
+    id: string;
+    channel: ContentChannel;
+    hook: string;
+    script?: string;
+    audience?: string;
+    product?: string;
+  }): Promise<boolean> {
+    const result = await callApi('save-hook', hook);
+    return result !== null;
+  },
+
+  async updateHookResult(id: string, resultMetric: string, resultValue: number, notes?: string): Promise<boolean> {
+    const result = await callApi('update-hook-result', { id, resultMetric, resultValue, notes });
+    return result !== null;
+  },
+
+  async getHooks(channel?: ContentChannel): Promise<LibraryHook[]> {
+    const result = await callApi<LibraryHook[]>('get-hooks', channel ? { channel } : {});
+    return Array.isArray(result) ? result : [];
+  },
+
+  async deleteHook(id: string): Promise<void> {
+    await callApi('delete-hook', { id });
   }
 };
