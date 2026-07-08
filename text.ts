@@ -60,7 +60,8 @@ export const TRANSLATIONS = {
           EMAIL_SUBJECT: "Email Subject",
           NEWSLETTER: "Newsletter Opener",
           FACEBOOK: "Facebook Post",
-          INSTAGRAM: "Instagram Post"
+          INSTAGRAM: "Instagram Post",
+          PROMPT: "Priming Prompt"
         }
       },
       fields: {
@@ -460,7 +461,8 @@ export const TRANSLATIONS = {
           EMAIL_SUBJECT: "E-Mail-Betreff",
           NEWSLETTER: "Newsletter-Opener",
           FACEBOOK: "Facebook-Post",
-          INSTAGRAM: "Instagram-Post"
+          INSTAGRAM: "Instagram-Post",
+          PROMPT: "Priming-Prompt"
         }
       },
       fields: {

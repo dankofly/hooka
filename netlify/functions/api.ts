@@ -313,6 +313,17 @@ const CHANNEL_SPECS: Record<string, { label: string; fieldSpec: string; rules: s
 - Short paragraphs (1-2 lines), emojis sparingly and only as visual anchors, never mid-sentence decoration.
 - Exactly one CTA. 3-5 niche hashtags, no generic mass tags (#love #instagood).
 - No external-link talk in the caption (links do not work there); point to profile/DM/save instead.`
+  },
+  PROMPT: {
+    label: 'Priming prompt (for external LLMs like ChatGPT)',
+    fieldSpec: `- "hook": Name of the prompt variant plus its job in one line (max 80 characters, e.g. "HOOK-CHIRURG: macht aus jedem Satz einen Scroll-Stopper").
+- "script": The COMPLETE priming prompt, ready to paste into ChatGPT/Claude/Gemini. It must be fully self-contained because the target LLM knows nothing else. Structure it with clear ALL-CAPS section headers: ROLLE (elite neuro-copywriter persona), REGELN (the neuromarketing rules it must obey), ZIELGRUPPE & PRODUKT (inject the brief's product, audience and tone of voice verbatim), WORTSCHATZ (the Limbic word-set matching this brief's motive), OUTPUT (exactly what to return, e.g. 5 rewrites ranked with a one-line why). End with the literal placeholder line: "TEXT: [hier deinen Text / Hook / Slogan einfügen]".
+- "strategy": When to use this variant instead of the others (1-2 sentences).
+- "visualPrompt": A concrete usage example: one realistic sample input line and, in one sentence, what kind of output to expect.`,
+    rules: `- Each of the 4 concepts is a DIFFERENT specialist prompt: 1) Universal-Umschreiber (rewrites any marketing text), 2) Hook-Chirurg (turns sentences into scroll-stopping hooks), 3) Slogan-Verdichter (compresses to claims/slogans of max 6 words), 4) Motiv-Rewriter (locked to the brief's Limbic profile, rewrites everything into that motive's world of words).
+- Transfer the framework INTO the prompt: the target LLM has no access to this system prompt, so the relevant rules (negation ban, one motive per text, specificity, trigger words, the matching Limbic word-set) must be written out inside each prompt.
+- 150-350 words per prompt. Direct imperative language. No meta-talk about being a prompt.
+- The prompt itself must be written in the output language and instruct the target LLM to answer in that language.`
   }
 };
 
