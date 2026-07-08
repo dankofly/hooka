@@ -3,8 +3,113 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { neon } from '@netlify/neon';
 import crypto from 'crypto';
 
-// Gemini model used for all generation calls (also logged to analytics)
+// Gemini model used when calling Google directly (fallback path)
 const GEMINI_MODEL = 'gemini-2.0-flash';
+
+// OpenRouter is the preferred LLM provider when configured. OpenAI-compatible,
+// model switchable via env without a code change.
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_MODEL = process.env.HOOKA_MODEL || 'google/gemini-2.5-flash';
+
+const openRouterChat = async (opts: {
+  system?: string;
+  prompt: string;
+  temperature?: number;
+  jsonSchema?: { name: string; schema: any };
+  webSearch?: boolean;
+}): Promise<{ text: string; totalTokens: number; citations: { title: string; uri: string }[] }> => {
+  const body: any = {
+    // The :online suffix enables OpenRouter's web-search grounding
+    model: opts.webSearch ? `${OPENROUTER_MODEL}:online` : OPENROUTER_MODEL,
+    messages: [
+      ...(opts.system ? [{ role: 'system', content: opts.system }] : []),
+      { role: 'user', content: opts.prompt }
+    ]
+  };
+  if (typeof opts.temperature === 'number') body.temperature = opts.temperature;
+  if (opts.jsonSchema && !opts.webSearch) {
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: { name: opts.jsonSchema.name, strict: true, schema: opts.jsonSchema.schema }
+    };
+  }
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://hooka.hypeakz.io',
+      'X-Title': 'Hooka'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`LLM Error (${res.status}): ${errText.substring(0, 300)}`);
+  }
+  const data = await res.json();
+  const msg = data.choices?.[0]?.message;
+  const citations = (msg?.annotations || [])
+    .filter((a: any) => a?.type === 'url_citation' && a?.url_citation?.url)
+    .map((a: any) => ({ title: a.url_citation.title || a.url_citation.url, uri: a.url_citation.url }));
+  return { text: msg?.content || '', totalTokens: data.usage?.total_tokens || 0, citations };
+};
+
+// Strict JSON schemas for OpenRouter structured outputs
+const RESEARCH_SCHEMA = {
+  type: 'object',
+  properties: {
+    productContext: { type: 'string' },
+    targetAudience: { type: 'string' },
+    goal: { type: 'string' },
+    speaker: { type: 'string' }
+  },
+  required: ['productContext', 'targetAudience', 'goal', 'speaker'],
+  additionalProperties: false
+};
+
+const CONCEPTS_SCHEMA = {
+  type: 'object',
+  properties: {
+    concepts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          hook: { type: 'string' },
+          script: { type: 'string' },
+          strategy: { type: 'string' },
+          visualPrompt: { type: 'string' },
+          scores: {
+            type: 'object',
+            properties: {
+              patternInterrupt: { type: 'integer' },
+              emotionalIntensity: { type: 'integer' },
+              curiosityGap: { type: 'integer' },
+              scarcity: { type: 'integer' }
+            },
+            required: ['patternInterrupt', 'emotionalIntensity', 'curiosityGap', 'scarcity'],
+            additionalProperties: false
+          }
+        },
+        required: ['hook', 'script', 'strategy', 'visualPrompt', 'scores'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['concepts'],
+  additionalProperties: false
+};
+
+// Robust JSON extraction: direct parse, then fenced/embedded JSON
+const extractJson = (text: string): any => {
+  try { return JSON.parse(text); } catch (e) {}
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/[\{\[][\s\S]*[\}\]]/);
+  if (match) {
+    try { return JSON.parse((match[1] || match[0]).trim()); } catch (e) {}
+  }
+  return null;
+};
 
 // SECURITY: Restrict CORS to allowed origins
 const ALLOWED_ORIGINS = [
@@ -342,9 +447,10 @@ export const handler = async (event: any, context: any) => {
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
+    const hasLlm = !!(OPENROUTER_API_KEY || apiKey);
     const sql = getSql();
 
-    if (!apiKey && !sql) return { statusCode: 500, headers, body: JSON.stringify({ error: "Configuration Error" }) };
+    if (!hasLlm && !sql) return { statusCode: 500, headers, body: JSON.stringify({ error: "Configuration Error" }) };
 
     let body;
     try {
@@ -647,7 +753,7 @@ export const handler = async (event: any, context: any) => {
 
       // --- RESEARCH ---
       case 'research': {
-        if (!apiKey) throw new Error("Missing API Key");
+        if (!hasLlm) throw new Error("Missing API Key");
 
         // Rate limit: research burns Gemini + Jina budget, cap it per caller and day
         if (sql) {
@@ -660,7 +766,7 @@ export const handler = async (event: any, context: any) => {
           sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${rId}, 'research', ${Date.now()}, ${{ key: quotaKey }})`.catch(console.error);
         }
 
-        const ai = new GoogleGenAI({ apiKey });
+        const ai = apiKey ? new GoogleGenAI({ apiKey }) : null as any;
         const { url, language } = payload;
 
         if (!url) throw new Error("URL Required");
@@ -727,41 +833,42 @@ OUTPUT: Valid JSON only.
 LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         }
 
-        const config: any = {
-            temperature: 0.3 // Lower temperature for more factual extraction
-        };
+        let responseText = "";
+        let searchCitations: { title: string; uri: string }[] = [];
+        let geminiGrounding: any[] = [];
 
-        if (useSearchTool) {
-            // Note: responseMimeType (JSON mode) is NOT compatible with Google Search tool
-            config.tools = [{googleSearch: {}}];
+        if (OPENROUTER_API_KEY) {
+          const r = await openRouterChat({
+            prompt,
+            temperature: 0.3, // Lower temperature for more factual extraction
+            webSearch: useSearchTool,
+            jsonSchema: useSearchTool ? undefined : { name: 'brand_brief', schema: RESEARCH_SCHEMA }
+          });
+          responseText = r.text;
+          searchCitations = r.citations;
         } else {
-            // Only use JSON mode when NOT using search tool
-            config.responseMimeType = "application/json";
-        }
+          const config: any = {
+              temperature: 0.3 // Lower temperature for more factual extraction
+          };
 
-        const response = await ai.models.generateContent({
-          model: GEMINI_MODEL,
-          contents: prompt,
-          config: config,
-        });
-
-        // Robust JSON Parsing
-        let jsonData: any = {};
-        const responseText = response.text || "";
-
-        try {
-          jsonData = JSON.parse(responseText);
-        } catch (e) {
-          // Try to extract JSON from markdown code blocks
-          const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/) ||
-                           responseText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-             const jsonStr = jsonMatch[1] || jsonMatch[0];
-             try { jsonData = JSON.parse(jsonStr.trim()); } catch(e2) {
-               console.error("JSON parse failed:", jsonStr);
-             }
+          if (useSearchTool) {
+              // Note: responseMimeType (JSON mode) is NOT compatible with Google Search tool
+              config.tools = [{googleSearch: {}}];
+          } else {
+              // Only use JSON mode when NOT using search tool
+              config.responseMimeType = "application/json";
           }
+
+          const response = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: prompt,
+            config: config,
+          });
+          responseText = response.text || "";
+          geminiGrounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
         }
+
+        let jsonData: any = extractJson(responseText) || {};
 
         // Validate that we got real content, not empty strings
         const hasRealContent = (jsonData.productContext && jsonData.productContext.length > 20) ||
@@ -786,12 +893,13 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
           ? [{ title: isGerman ? "Direkt-Scan der Website" : "Direct Website Scan", uri: url }]
           : [{ title: isGerman ? "KI-Recherche" : "AI Research", uri: url }];
 
-        if (useSearchTool && response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
-             response.candidates[0].groundingMetadata.groundingChunks.forEach((chunk: any) => {
-                 if (chunk.web?.uri && chunk.web?.title) {
-                     sources.push({ title: chunk.web.title, uri: chunk.web.uri });
-                 }
-             });
+        if (useSearchTool) {
+          searchCitations.forEach(c => sources.push(c));
+          geminiGrounding.forEach((chunk: any) => {
+            if (chunk.web?.uri && chunk.web?.title) {
+              sources.push({ title: chunk.web.title, uri: chunk.web.uri });
+            }
+          });
         }
 
         result = {
@@ -806,7 +914,7 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
 
       // --- GENERATE HOOKS ---
       case 'generate-hooks': {
-        if (!apiKey) throw new Error("Missing API Key");
+        if (!hasLlm) throw new Error("Missing API Key");
         const { brief } = payload;
         if (!brief) throw new Error("Missing brief");
         const channel = normalizeChannel(brief.channel);
@@ -827,8 +935,6 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         }
 
         try {
-          const ai = new GoogleGenAI({ apiKey });
-
           let customTuning = "";
           if (sql) {
             try {
@@ -898,45 +1004,61 @@ ${losers.length ? `Weak performers (avoid these patterns):\n${losers.map((l: any
           - Scarcity/FOMO: ${scores.scarcity}/100 (Urgency)
           `;
 
-          const response = await ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: prompt,
-            config: {
-              systemInstruction: getSystemInstruction(brief.language, customTuning),
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    hook: { type: Type.STRING },
-                    script: { type: Type.STRING },
-                    strategy: { type: Type.STRING },
-                    visualPrompt: { type: Type.STRING },
-                    scores: {
-                      type: Type.OBJECT,
-                      properties: {
-                        patternInterrupt: { type: Type.INTEGER },
-                        emotionalIntensity: { type: Type.INTEGER },
-                        curiosityGap: { type: Type.INTEGER },
-                        scarcity: { type: Type.INTEGER },
-                      },
-                      required: ["patternInterrupt", "emotionalIntensity", "curiosityGap", "scarcity"]
-                    }
+          let conceptsText = "";
+          let totalTokens = 0;
+          const activeModel = OPENROUTER_API_KEY ? OPENROUTER_MODEL : GEMINI_MODEL;
+
+          if (OPENROUTER_API_KEY) {
+            const r = await openRouterChat({
+              system: getSystemInstruction(brief.language, customTuning),
+              prompt,
+              jsonSchema: { name: 'hook_concepts', schema: CONCEPTS_SCHEMA }
+            });
+            conceptsText = r.text;
+            totalTokens = r.totalTokens;
+          } else {
+            const ai = new GoogleGenAI({ apiKey });
+            const response = await ai.models.generateContent({
+              model: GEMINI_MODEL,
+              contents: prompt,
+              config: {
+                systemInstruction: getSystemInstruction(brief.language, customTuning),
+                responseMimeType: "application/json",
+                responseSchema: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      hook: { type: Type.STRING },
+                      script: { type: Type.STRING },
+                      strategy: { type: Type.STRING },
+                      visualPrompt: { type: Type.STRING },
+                      scores: {
+                        type: Type.OBJECT,
+                        properties: {
+                          patternInterrupt: { type: Type.INTEGER },
+                          emotionalIntensity: { type: Type.INTEGER },
+                          curiosityGap: { type: Type.INTEGER },
+                          scarcity: { type: Type.INTEGER },
+                        },
+                        required: ["patternInterrupt", "emotionalIntensity", "curiosityGap", "scarcity"]
+                      }
+                    },
+                    required: ["hook", "script", "strategy", "visualPrompt", "scores"]
                   },
-                  required: ["hook", "script", "strategy", "visualPrompt", "scores"]
                 },
               },
-            },
-          });
+            });
+            conceptsText = response.text || "";
+            totalTokens = response.usageMetadata?.totalTokenCount || 0;
+          }
 
           if (sql) {
-            const totalTokens = response.usageMetadata?.totalTokenCount || 0;
             const timestamp = Date.now();
 
             // Log AI cost
             const costLogId = timestamp.toString() + Math.random().toString(36).substring(7);
-            sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${costLogId}, 'ai_cost', ${timestamp}, ${{ tokens: totalTokens, model: GEMINI_MODEL }})`.catch(console.error);
+            sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${costLogId}, 'ai_cost', ${timestamp}, ${{ tokens: totalTokens, model: activeModel }})`.catch(console.error);
 
             // Log generation with all parameters for stats
             const genLogId = timestamp.toString() + Math.random().toString(36).substring(2, 9);
@@ -959,8 +1081,8 @@ ${losers.length ? `Weak performers (avoid these patterns):\n${losers.map((l: any
             sql`INSERT INTO hypeakz_analytics (id, event_name, timestamp, metadata) VALUES (${genLogId}, 'generation', ${timestamp}, ${generationMeta})`.catch(console.error);
           }
 
-          let concepts: any[] = [];
-          try { concepts = JSON.parse(response.text || "[]"); } catch(e) { concepts = []; }
+          const parsed = extractJson(conceptsText);
+          const concepts: any[] = Array.isArray(parsed) ? parsed : (parsed?.concepts || []);
           result = {
             concepts,
             quota: quotaState
