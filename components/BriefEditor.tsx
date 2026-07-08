@@ -13,7 +13,7 @@ const DEFAULT_NEURO_SCORES: NeuroScores = {
   scarcity: 50
 };
 
-const CHANNELS: ContentChannel[] = ['VIDEO', 'EMAIL_SUBJECT', 'NEWSLETTER', 'FACEBOOK'];
+const CHANNELS: ContentChannel[] = ['VIDEO', 'EMAIL_SUBJECT', 'NEWSLETTER', 'FACEBOOK', 'INSTAGRAM'];
 
 const inputClasses = "w-full p-4 md:p-5 bg-white dark:bg-zinc-950 border border-zinc-300 dark:border-zinc-700 rounded-lg outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition-all text-base text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600 font-medium shadow-sm";
 const labelClasses = "block text-sm font-black text-zinc-600 dark:text-zinc-400 uppercase tracking-[0.15em] mb-2 md:mb-3 px-1 antialiased";

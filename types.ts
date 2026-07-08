@@ -33,7 +33,7 @@ export enum GenerationStatus {
 export type Language = 'DE' | 'EN';
 
 // Output channel: redefines what hook/script/visualPrompt mean per channel
-export type ContentChannel = 'VIDEO' | 'EMAIL_SUBJECT' | 'NEWSLETTER' | 'FACEBOOK';
+export type ContentChannel = 'VIDEO' | 'EMAIL_SUBJECT' | 'NEWSLETTER' | 'FACEBOOK' | 'INSTAGRAM';
 
 // A hook stored in the personal library, optionally with a real-world result.
 // Rated hooks feed back into generation as few-shot examples.

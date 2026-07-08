@@ -59,7 +59,8 @@ export const TRANSLATIONS = {
           VIDEO: "Video (TikTok/Reels)",
           EMAIL_SUBJECT: "Email Subject",
           NEWSLETTER: "Newsletter Opener",
-          FACEBOOK: "Facebook Post"
+          FACEBOOK: "Facebook Post",
+          INSTAGRAM: "Instagram Post"
         }
       },
       fields: {
@@ -458,7 +459,8 @@ export const TRANSLATIONS = {
           VIDEO: "Video (TikTok/Reels)",
           EMAIL_SUBJECT: "E-Mail-Betreff",
           NEWSLETTER: "Newsletter-Opener",
-          FACEBOOK: "Facebook-Post"
+          FACEBOOK: "Facebook-Post",
+          INSTAGRAM: "Instagram-Post"
         }
       },
       fields: {
