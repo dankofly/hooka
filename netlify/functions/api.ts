@@ -135,7 +135,7 @@ const getCorsOrigin = (requestOrigin: string | undefined) => {
 
 const getHeaders = (requestOrigin?: string) => ({
   "Access-Control-Allow-Origin": getCorsOrigin(requestOrigin),
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Service-Token",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 });
 
@@ -460,7 +460,13 @@ export const handler = async (event: any, context: any) => {
     }
 
     const { action, payload = {} } = body;
-    const authUserId = getAuthUserId(context);
+    // Machine-to-machine auth for trusted agents (DARA on the Hermes box):
+    // a shared secret in X-Service-Token maps to a fixed service identity
+    // with the same rights as a logged-in user (unlimited + own library).
+    const serviceToken = process.env.HOOKA_SERVICE_TOKEN;
+    const providedServiceToken = event.headers?.['x-service-token'];
+    const isServiceCall = !!(serviceToken && providedServiceToken && safeEqual(providedServiceToken, serviceToken));
+    const authUserId = isServiceCall ? 'user-dara-svc' : getAuthUserId(context);
     const clientIp = getClientIp(event);
     // Quota/rate-limit key: verified identity first, IP as anonymous fallback
     const quotaKey = authUserId || `ip:${clientIp}`;
