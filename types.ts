@@ -240,11 +240,8 @@ export interface TranslationObject {
     upgradeSubtext: string;
     contactUs: string;
     contactEmail: string;
-    checkoutButton: string;
     loginFirst: string;
     orContact: string;
-    checkoutSuccess: string;
-    checkoutCancelled: string;
     upgradeCta: string;
   };
   whyHooka: {
@@ -287,39 +284,6 @@ export interface TranslationObject {
     ctaTitle: string;
     ctaSubtitle: string;
     ctaButton: string;
-  };
-  pricing: {
-    navTitle: string;
-    title: string;
-    badge: string;
-    headline: string;
-    subheadline: string;
-    freePlan: string;
-    premiumPlan: string;
-    forever: string;
-    month: string;
-    popular: string;
-    ctaPremium: string;
-    loginToUpgrade: string;
-    activeSubscription: string;
-    feature1Free: string;
-    feature2Free: string;
-    feature3Free: string;
-    feature4Free: string;
-    feature1Premium: string;
-    feature2Premium: string;
-    feature3Premium: string;
-    feature4Premium: string;
-    feature5Premium: string;
-    feature6Premium: string;
-    faqTitle: string;
-    faq1Q: string;
-    faq1A: string;
-    faq2Q: string;
-    faq2A: string;
-    faq3Q: string;
-    faq3A: string;
-    questions: string;
   };
   legal: {
     consent: {

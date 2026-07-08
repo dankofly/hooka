@@ -1,16 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 import { neon } from '@netlify/neon';
-import Stripe from 'stripe';
 import crypto from 'crypto';
-
-// Initialize Stripe (only if key is available)
-const stripe = process.env.STRIPE_SECRET_KEY
-  ? new Stripe(process.env.STRIPE_SECRET_KEY)
-  : null;
-
-// Stripe Price ID for €10/month subscription (set in Netlify env vars)
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
 
 // Gemini model used for all generation calls (also logged to analytics)
 const GEMINI_MODEL = 'gemini-2.0-flash';
@@ -127,31 +118,40 @@ const ensureTables = async (sql: any) => {
   return tablesInitPromise;
 };
 
-// Atomically consume one generation. Returns allowed=false when the free
-// limit is reached and the caller is not premium. The WHERE clause on the
-// upsert makes check-and-increment race-free.
-const consumeGeneration = async (sql: any, key: string) => {
+// Atomically consume one generation. Logged-in callers (unlimited=true) only
+// count usage for stats; anonymous callers hit the free limit. The WHERE
+// clause on the upsert makes check-and-increment race-free.
+const consumeGeneration = async (sql: any, key: string, unlimited: boolean) => {
+  if (unlimited) {
+    const rows = await sql`
+      INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at)
+      VALUES (${key}, 1, FALSE, ${Date.now()})
+      ON CONFLICT (user_id) DO UPDATE
+        SET used_generations = hypeakz_quotas.used_generations + 1
+      RETURNING used_generations
+    `;
+    return { allowed: true, usedGenerations: rows[0].used_generations, isPremium: true };
+  }
   const rows = await sql`
     INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at)
     VALUES (${key}, 1, FALSE, ${Date.now()})
     ON CONFLICT (user_id) DO UPDATE
       SET used_generations = hypeakz_quotas.used_generations + 1
-      WHERE hypeakz_quotas.is_premium = TRUE
-         OR hypeakz_quotas.used_generations < ${FREE_GENERATION_LIMIT}
-    RETURNING used_generations, is_premium
+      WHERE hypeakz_quotas.used_generations < ${FREE_GENERATION_LIMIT}
+    RETURNING used_generations
   `;
   if (rows.length === 0) {
-    const cur = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
+    const cur = await sql`SELECT used_generations FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
     return {
       allowed: false,
       usedGenerations: cur[0]?.used_generations ?? FREE_GENERATION_LIMIT,
-      isPremium: cur[0]?.is_premium === true
+      isPremium: false
     };
   }
   return {
     allowed: true,
     usedGenerations: rows[0].used_generations,
-    isPremium: rows[0].is_premium === true
+    isPremium: false
   };
 };
 
@@ -473,16 +473,13 @@ export const handler = async (event: any, context: any) => {
           break;
         }
         const key = authUserId || (payload.userId ? String(payload.userId) : `ip:${clientIp}`);
-        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
-        if (rows.length === 0) {
-          result = { usedGenerations: 0, limit: FREE_GENERATION_LIMIT, isPremium: false };
-        } else {
-          result = {
-            usedGenerations: rows[0].used_generations || 0,
-            limit: FREE_GENERATION_LIMIT,
-            isPremium: rows[0].is_premium === true
-          };
-        }
+        const rows = await sql`SELECT used_generations FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
+        // Logged-in users generate without limits ("isPremium" = unlimited flag for the UI)
+        result = {
+          usedGenerations: rows.length ? (rows[0].used_generations || 0) : 0,
+          limit: FREE_GENERATION_LIMIT,
+          isPremium: !!authUserId
+        };
         break;
       }
       case 'increment-quota': {
@@ -497,102 +494,22 @@ export const handler = async (event: any, context: any) => {
         if (!key || typeof localCount !== 'number') break;
         const safeLocal = Math.max(0, Math.min(Math.floor(localCount), FREE_GENERATION_LIMIT));
 
-        const rows = await sql`SELECT used_generations, is_premium FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
+        const rows = await sql`SELECT used_generations FROM hypeakz_quotas WHERE user_id = ${key} LIMIT 1`;
 
+        // key is always an authenticated user here, so unlimited applies
         if (rows.length === 0) {
           await sql`INSERT INTO hypeakz_quotas (user_id, used_generations, is_premium, created_at) VALUES (${key}, ${safeLocal}, FALSE, ${Date.now()})`;
-          result = { usedGenerations: safeLocal, limit: FREE_GENERATION_LIMIT, isPremium: false };
+          result = { usedGenerations: safeLocal, limit: FREE_GENERATION_LIMIT, isPremium: true };
         } else {
           const dbCount = rows[0].used_generations || 0;
-          const isPremium = rows[0].is_premium === true;
           const finalCount = Math.max(dbCount, safeLocal);
 
           if (finalCount > dbCount) {
             await sql`UPDATE hypeakz_quotas SET used_generations = ${finalCount} WHERE user_id = ${key}`;
           }
 
-          result = { usedGenerations: finalCount, limit: FREE_GENERATION_LIMIT, isPremium };
+          result = { usedGenerations: finalCount, limit: FREE_GENERATION_LIMIT, isPremium: true };
         }
-        break;
-      }
-
-      // --- STRIPE CHECKOUT ---
-      case 'create-checkout': {
-        if (!stripe) {
-          console.error("Stripe not initialized - STRIPE_SECRET_KEY missing");
-          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing secret key)" }) };
-        }
-        if (!STRIPE_PRICE_ID) {
-          console.error("STRIPE_PRICE_ID not set");
-          return { statusCode: 500, headers, body: JSON.stringify({ error: "Stripe not configured (missing price ID)" }) };
-        }
-
-        // Checkout requires a verified identity; the subscription must be
-        // bound to the JWT-derived user id, not a client-chosen one.
-        const checkoutUserId = authUserId;
-        const checkoutEmail = getAuthEmail(context) || payload.userEmail;
-        if (!checkoutUserId || !checkoutEmail) {
-          return { statusCode: 401, headers, body: JSON.stringify({ error: "Login required for checkout" }) };
-        }
-
-        const { successUrl, cancelUrl } = payload;
-
-        try {
-          const session = await stripe.checkout.sessions.create({
-            mode: 'subscription',
-            payment_method_types: ['card'],
-            customer_email: checkoutEmail,
-            line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
-            success_url: successUrl || 'https://hooka.hypeakz.io/?checkout=success',
-            cancel_url: cancelUrl || 'https://hooka.hypeakz.io/?checkout=cancelled',
-            metadata: { userId: checkoutUserId },
-            subscription_data: {
-              metadata: { userId: checkoutUserId }
-            }
-          });
-
-          result = { sessionId: session.id, url: session.url };
-        } catch (stripeError: any) {
-          console.error("Stripe Checkout Error:", stripeError.message, stripeError.type);
-          return { statusCode: 500, headers, body: JSON.stringify({
-            error: stripeError.message || "Stripe checkout failed",
-            type: stripeError.type
-          }) };
-        }
-        break;
-      }
-
-      case 'check-subscription': {
-        // Check if user has active subscription (called periodically)
-        if (!sql || !authUserId) {
-          result = { isPremium: false };
-          break;
-        }
-
-        const rows = await sql`SELECT is_premium, stripe_subscription_id FROM hypeakz_quotas WHERE user_id = ${authUserId} LIMIT 1`;
-        if (rows.length === 0 || !rows[0].is_premium) {
-          result = { isPremium: false };
-          break;
-        }
-
-        // Optionally verify with Stripe if subscription is still active
-        if (stripe && rows[0].stripe_subscription_id) {
-          try {
-            const subscription = await stripe.subscriptions.retrieve(rows[0].stripe_subscription_id);
-            const isActive = ['active', 'trialing'].includes(subscription.status);
-            if (!isActive) {
-              // Update DB if subscription is no longer active
-              await sql`UPDATE hypeakz_quotas SET is_premium = FALSE WHERE user_id = ${authUserId}`;
-              result = { isPremium: false };
-              break;
-            }
-          } catch (e) {
-            // If Stripe check fails, trust the DB
-            console.warn("Stripe subscription check failed:", e);
-          }
-        }
-
-        result = { isPremium: true };
         break;
       }
 
@@ -899,7 +816,7 @@ LANGUAGE: ${isGerman ? 'German' : 'English'}`;
         // spending Gemini tokens. Anonymous callers are keyed by IP.
         let quotaState: { usedGenerations: number; isPremium: boolean } | null = null;
         if (sql) {
-          const consumed = await consumeGeneration(sql, quotaKey);
+          const consumed = await consumeGeneration(sql, quotaKey, !!authUserId);
           if (!consumed.allowed) {
             return { statusCode: 429, headers, body: JSON.stringify({
               error: "QUOTA_EXCEEDED",
