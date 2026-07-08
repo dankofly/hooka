@@ -3,17 +3,17 @@
 <html lang="de" prefix="og: http://ogp.me/ns#">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
     <!-- PRIMARY SEO -->
-    <title>HYPEAKZ.IO | #1 AI Hook Generator & Neuro-Marketing Tool</title>
-    <meta name="title" content="HYPEAKZ.IO | #1 AI Hook Generator & Neuro-Marketing Tool">
-    <meta name="description" content="Der erste AI Hook Generator mit Neuro-Marketing & NLP. Erstelle virale Skripte für TikTok, Reels & Shorts, die wissenschaftlich fundiert den Scroll stoppen.">
-    <meta name="keywords" content="AI Hook Generator, Neuro-Marketing Tool, NLP Copywriting, Viral Video Scripts, TikTok Hooks, Instagram Reels, Content Creator AI, HYPEAKZ, Hookline Generator, Psychologie Marketing">
-    <meta name="author" content="HYPEAKZ.IO Agency">
+    <title>Hooka | AI Hook Generator für TikTok, Reels, E-Mail & Ads (by HYPEAKZ)</title>
+    <meta name="title" content="Hooka | AI Hook Generator für TikTok, Reels, E-Mail & Ads (by HYPEAKZ)">
+    <meta name="description" content="Hooka ist der AI Hook Generator mit Neuro-Marketing & NLP. Erstelle Hooks, virale Video-Skripte und Betreffzeilen für TikTok, Reels, Shorts, Newsletter und Facebook.">
+    <meta name="keywords" content="Hooka, AI Hook Generator, Neuro-Marketing Tool, NLP Copywriting, Viral Video Scripts, TikTok Hooks, Instagram Reels, E-Mail Betreffzeilen, Content Creator AI, HYPEAKZ">
+    <meta name="author" content="HYPEAKZ">
     <meta name="robots" content="index, follow">
     <meta name="language" content="German">
-    <link rel="canonical" href="https://hypeakz.io" />
+    <link rel="canonical" href="https://hooka.hypeakz.io/" />
 
     <!-- GEO LOCALIZATION (DACH Focus) -->
     <meta name="geo.region" content="AT-7" />
@@ -23,21 +23,54 @@
 
     <!-- OPEN GRAPH / FACEBOOK / LINKEDIN / WHATSAPP -->
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://hypeakz.io/">
-    <meta property="og:title" content="HYPEAKZ.IO | Stop The Scroll.">
-    <meta property="og:description" content="Generiere virale Video-Hooks durch künstliche Intelligenz und Neuro-Linguistik. Jetzt Conversion Rate steigern.">
-    <meta property="og:image" content="https://hypeakz.io/og-card.jpg">
+    <meta property="og:url" content="https://hooka.hypeakz.io/">
+    <meta property="og:title" content="Hooka | Stop The Scroll.">
+    <meta property="og:description" content="Generiere Hooks, virale Video-Skripte und Betreffzeilen mit Neuro-Marketing & NLP. Für TikTok, Reels, Newsletter und Ads.">
+    <meta property="og:image" content="https://hooka.hypeakz.io/og-card.jpg">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:site_name" content="HYPEAKZ.IO Neuro-Engine">
+    <meta property="og:site_name" content="Hooka by HYPEAKZ">
     <meta property="og:locale" content="de_DE">
 
     <!-- TWITTER / X -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://hypeakz.io/">
-    <meta property="twitter:title" content="HYPEAKZ.IO | AI Hook Generator">
-    <meta property="twitter:description" content="Nutze NLP & Neuro-Marketing für virale Skripte. Der #1 AI Hook Generator.">
-    <meta property="twitter:image" content="https://hypeakz.io/og-card.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://hooka.hypeakz.io/">
+    <meta name="twitter:title" content="Hooka | AI Hook Generator">
+    <meta name="twitter:description" content="Hooks, Video-Skripte und Betreffzeilen mit NLP & Neuro-Marketing. By HYPEAKZ.">
+    <meta name="twitter:image" content="https://hooka.hypeakz.io/og-card.jpg">
+
+    <!-- STRUCTURED DATA -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebApplication",
+          "@id": "https://hooka.hypeakz.io/#app",
+          "name": "Hooka",
+          "url": "https://hooka.hypeakz.io/",
+          "applicationCategory": "BusinessApplication",
+          "operatingSystem": "Web",
+          "description": "AI Hook Generator mit Neuro-Marketing und NLP: Hooks, virale Video-Skripte und Betreffzeilen für TikTok, Reels, Shorts, Newsletter und Facebook.",
+          "inLanguage": ["de", "en"],
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "EUR",
+            "description": "10 kostenlose Generierungen"
+          },
+          "publisher": { "@id": "https://hooka.hypeakz.io/#org" }
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://hooka.hypeakz.io/#org",
+          "name": "HYPEAKZ",
+          "url": "https://hypeakz.io/",
+          "sameAs": ["https://hooka.hypeakz.io/"]
+        }
+      ]
+    }
+    </script>
 
     <!-- THEME & ICONS -->
     <meta name="theme-color" content="#000000">
@@ -47,10 +80,6 @@
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      // Safe polyfill for process.env
-      window.process = window.process || {};
-      window.process.env = window.process.env || {};
-      
       tailwind.config = {
         darkMode: 'class',
         theme: {
@@ -157,29 +186,17 @@
         top: 0;
       }
     </style>
-    <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom": "https://esm.sh/react-dom@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "@google/genai": "https://esm.sh/@google/genai@1.35.0",
-    "@netlify/neon": "https://esm.sh/@netlify/neon@0.1.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
-    "vite": "https://esm.sh/vite@^7.3.1"
-  }
-}
-</script>
-  <link rel="stylesheet" href="/index.css">
-  <!-- Netlify Identity Widget -->
-  <script src="https://identity.netlify.com/v1/netlify-identity-widget.js"></script>
+    <!-- Netlify Identity Widget (version-pinned with SRI) -->
+  <script src="https://unpkg.com/netlify-identity-widget@1.9.2/build/netlify-identity-widget.js" integrity="sha384-dy2tW8xkhLIj8lZR42MCwZhhDb2cCewZiw0uA65CMpdHiJzL+iubx7HzHcCXU2rW" crossorigin="anonymous"></script>
 </head>
   <body class="bg-lightBg dark:bg-darkBg text-zinc-900 dark:text-zinc-100 antialiased">
     <a href="#main-content" class="skip-link">Skip to main content</a>
     <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
-  <script type="module" src="/index.tsx"></script>
+    <noscript>
+      <h1>Hooka: AI Hook Generator mit Neuro-Marketing und NLP</h1>
+      <p>Hooka generiert Hooks, virale Video-Skripte und Betreffzeilen für TikTok, Instagram Reels, YouTube Shorts, E-Mail-Newsletter und Facebook. Jedes Konzept basiert auf Neuro-Marketing-Prinzipien: Limbic Types, NLP-Meta-Programme, Pattern Interrupts und Curiosity Gaps.</p>
+      <p>10 Generierungen kostenlos, danach Premium. Ein Tool von <a href="https://hypeakz.io/">HYPEAKZ</a>. Diese App benötigt JavaScript.</p>
+    </noscript>
+    <script type="module" src="/index.tsx"></script>
 </body>
 </html>

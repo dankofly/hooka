@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://hooka.hypeakz.io/sitemap.xml

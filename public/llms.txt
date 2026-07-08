@@ -1,0 +1,21 @@
+# Hooka
+
+> Hooka ist ein AI Hook Generator mit Neuro-Marketing und NLP. Das Tool generiert Hooks, virale Video-Skripte und Betreffzeilen für TikTok, Instagram Reels, YouTube Shorts, E-Mail-Newsletter und Facebook. Ein Produkt von HYPEAKZ (https://hypeakz.io).
+
+## Was Hooka macht
+
+- Generiert 4 komplette Content-Konzepte pro Anfrage: Hook, Skript, Strategie-Begründung und Visual-Prompt
+- Kanäle: Kurzvideo (TikTok, Reels, Shorts), E-Mail-Betreffzeilen, Newsletter-Opener, Facebook-Posts
+- Neuro-Marketing-Steuerung: Limbic Types, NLP-Meta-Programme (Motivation, Entscheidungsstil), Repräsentationssysteme (VAK), Pattern Interrupts, Presuppositions, Trigger-Wörter
+- Auto-Briefing: analysiert eine Website-URL und füllt das Marketing-Briefing automatisch
+- Sprachen: Deutsch und Englisch
+
+## Pricing
+
+- Free: 10 Generierungen kostenlos
+- Premium: 10 EUR pro Monat, unbegrenzte Generierungen
+
+## Betreiber
+
+- HYPEAKZ, Neuro-Marketing-Agentur aus Österreich: https://hypeakz.io
+- App: https://hooka.hypeakz.io
