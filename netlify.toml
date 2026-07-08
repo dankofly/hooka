@@ -12,6 +12,13 @@ for = "/*"
   X-Content-Type-Options = "nosniff"
   Referrer-Policy = "strict-origin-when-cross-origin"
 
+# Canonical host: redirect the Netlify subdomain to the custom domain
+[[redirects]]
+from = "https://stirring-otter-3510b8.netlify.app/*"
+to = "https://hooka.hypeakz.io/:splat"
+status = 301
+force = true
+
 # SPA fallback for all other routes
 # (/.netlify/* is reserved by Netlify and passes through automatically)
 [[redirects]]
