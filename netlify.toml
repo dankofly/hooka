@@ -5,9 +5,12 @@ publish = "dist"
   # Deploy-Credits sparen: ein Netlify-Production-Deploy kostet 15 Credits,
   # unabhaengig von der Buildzeit. Commits, die NUR CI-Workflows, Docs, Markdown
   # oder Tests aendern, loesen deshalb keinen Build aus.
-  # Exit 0 = Build ueberspringen, Exit != 0 = bauen. Beim ersten Build ist
-  # CACHED_COMMIT_REF leer, git diff schlaegt fehl und es wird gebaut.
-  ignore = "git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ':(exclude).github' ':(exclude)docs' ':(exclude)**/*.md' ':(exclude)tests'"
+  # Exit 0 = Build ueberspringen, Exit != 0 = bauen.
+  # Guards: Ist CACHED_COMMIT_REF leer (kalter Cache, z.B. nach abgebrochenem
+  # Build) oder gleich COMMIT_REF, MUSS gebaut werden. Ohne den Guard vergleicht
+  # git diff den Commit mit dem eigenen Worktree (immer identisch, Exit 0) und
+  # die Site kann nie wieder deployen.
+  ignore = "test -n \"$CACHED_COMMIT_REF\" && test \"$CACHED_COMMIT_REF\" != \"$COMMIT_REF\" && git diff --quiet $CACHED_COMMIT_REF $COMMIT_REF -- . ':(exclude).github' ':(exclude)docs' ':(exclude)*.md' ':(exclude)tests'"
 
 # Security Headers
 [[headers]]
